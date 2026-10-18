@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Setup and running
 
-Python >=3.12, managed with `uv` (`uv.lock`, `.venv`). There is no test suite, linter config, or README.
+Python >=3.12, managed with `uv` (`uv.lock`, `.venv`). There is no test suite or linter config. `README.md` covers setup and features for users.
 
 - Install: `uv sync`
 - Run the demo workbench: `uv run python src/run_workbench.py` (127.0.0.1:8000, admin/`1234`; host UI at `/ui/`). Workers join it with the workbench's URL plus an invite code created in its UI. The workbench's `public_url` must equal the URL the worker joined with.
