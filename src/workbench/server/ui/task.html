@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Task – Workbench</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="common.js" defer></script>
+  <script src="task.js" defer></script>
+</head>
+<body class="tree-page">
+  <header class="topbar">
+    <a href="index.html" class="back">← Tasks</a>
+    <span id="root-agent"></span>
+    <h1 id="root-title">Task</h1>
+    <span class="grow"></span>
+    <svg class="legend" id="legend" width="470" height="24" aria-label="legend"></svg>
+    <span id="root-icon"></span>
+    <a id="settings-link" class="icon-btn" href="settings.html" title="Settings" aria-label="Settings"></a>
+    <button id="cancel-root" class="mini danger" type="button" hidden>Cancel task</button>
+  </header>
+
+  <div class="stage">
+    <div id="canvas" class="canvas"><svg id="tree"></svg></div>
+    <aside id="panel" class="panel" hidden>
+      <header>
+        <div class="panel-title">
+          <span id="p-agent-icon"></span>
+          <div><strong id="p-topic"></strong><div id="p-agent" class="muted"></div></div>
+        </div>
+        <div class="panel-actions">
+          <span id="p-icon"></span>
+          <button id="p-cancel" class="mini danger" type="button" hidden>Cancel</button>
+          <button id="p-close" class="link" type="button" aria-label="Close">×</button>
+        </div>
+      </header>
+      <div id="log" class="log"></div>
+    </aside>
+  </div>
+</body>
+</html>

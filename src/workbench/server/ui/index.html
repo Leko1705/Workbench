@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workbench</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="common.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main id="login-view" class="login" hidden>
+    <form id="login-form" class="card">
+      <h1>Workbench</h1>
+      <label>Username <input name="username" autocomplete="username" required autofocus></label>
+      <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
+      <p id="login-error" class="error" role="alert" hidden></p>
+      <button type="submit" class="primary">Log in</button>
+    </form>
+  </main>
+
+  <div id="app-view" class="app" hidden>
+    <aside class="sidebar">
+      <header>
+        <h2 id="wb-name">Workbench</h2>
+        <span class="head-actions">
+          <a id="settings-link" class="icon-btn" href="settings.html" title="Settings" aria-label="Settings"></a>
+          <button id="logout" class="link" type="button">Log out</button>
+        </span>
+      </header>
+
+      <section>
+        <h3>Agents</h3>
+        <ul id="workers" class="rows"></ul>
+        <p id="workers-empty" class="muted pad" hidden>No agents yet. Create an invite below.</p>
+      </section>
+
+      <section>
+        <h3>Invites</h3>
+        <ul id="invites" class="rows"></ul>
+        <form id="invite-form" class="pad" autocomplete="off">
+          <input name="label" placeholder="Label (optional)" maxlength="200">
+          <label class="check"><input name="auto_approve" type="checkbox"> Approve joins automatically</label>
+          <button type="submit" class="primary small">Create invite</button>
+        </form>
+        <div id="invite-result" class="pad" hidden>
+          <p class="muted">Give this join token to the worker (shown only once):</p>
+          <p id="invite-token" class="code"></p>
+          <button id="copy-token" class="mini" type="button">Copy</button>
+          <details><summary class="muted">Separate URL and code</summary>
+            <p class="muted">URL: <span id="invite-url"></span></p>
+            <p class="muted">Code: <span id="invite-code" class="code-inline"></span></p>
+          </details>
+        </div>
+      </section>
+    </aside>
+
+    <section class="main">
+      <h2>Tasks</h2>
+      <ul id="roots" class="roots"></ul>
+      <p id="roots-empty" class="muted" hidden>No tasks yet. Start one on the right.</p>
+    </section>
+
+    <aside class="newtask">
+      <form id="task-form" class="card" autocomplete="off">
+        <h1>New task</h1>
+        <label>Agent <select name="agent_id" required></select></label>
+        <label>Message <textarea name="text" rows="5" required></textarea></label>
+        <p id="task-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="primary">Start</button>
+      </form>
+    </aside>
+  </div>
+</body>
+</html>

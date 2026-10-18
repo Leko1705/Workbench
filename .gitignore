@@ -1,0 +1,7 @@
+.venv/
+.idea/
+__pycache__/
+*.pyc
+# worker state files hold workbench tokens in plain text
+*.state.json
+*.state.json.tmp

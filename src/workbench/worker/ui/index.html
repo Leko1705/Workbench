@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Worker</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main id="login-view" class="login" hidden>
+    <form id="login-form" class="card" autocomplete="on">
+      <h1>Sign in</h1>
+      <label>Username
+        <input name="username" autocomplete="username" required autofocus>
+      </label>
+      <label>Password
+        <input name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <p id="login-error" class="error" role="alert" hidden></p>
+      <button type="submit" class="primary">Log in</button>
+    </form>
+  </main>
+
+  <div id="app-view" class="app" hidden>
+    <aside class="sidebar">
+      <header>
+        <h2>Workbenches</h2>
+        <button id="logout" class="link" type="button">Log out</button>
+      </header>
+      <ul id="wb-list" class="wb-list"></ul>
+      <p id="wb-empty" class="muted empty" hidden>Not connected to any workbench yet.</p>
+    </aside>
+
+    <section class="content">
+      <form id="join-form" class="card" autocomplete="off">
+        <h1>Connect to a workbench</h1>
+        <div id="join-token-fields">
+          <label>Join token
+            <input name="join_token" placeholder="wbj1.…" spellcheck="false" autocomplete="off" autofocus>
+          </label>
+        </div>
+        <div id="join-manual-fields" hidden>
+          <label>Workbench URL
+            <input name="base_url" type="url" placeholder="https://workbench.example">
+          </label>
+          <label>Invite code
+            <input name="invite_code">
+          </label>
+        </div>
+        <p class="alt"><button id="join-mode" class="link" type="button">Enter URL and invite code instead</button></p>
+        <p id="join-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="primary">Connect</button>
+      </form>
+    </section>
+  </div>
+</body>
+</html>

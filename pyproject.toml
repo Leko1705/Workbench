@@ -1,0 +1,15 @@
+[project]
+name = "workbenchagent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "a2a>=0.44",
+    "a2a-sdk[http-server]>=1.2.2",
+    "anthropic>=1.15.0",
+    "fastapi>=0.143.2",
+    "httpx>=0.28.1",
+    "openai>=3.33.0",
+    "pydantic>=2.14.1",
+    "starlette>=1.8.0",
+    "uvicorn>=0.54.0",
+]
