@@ -10,8 +10,7 @@ from a2a.server.tasks import TaskUpdater
 from a2a.types import Part, TaskState
 
 from .llm_providers import ChatMessage, LLMProvider, LLMResponse, TextDelta, ToolCall, ToolResult
-from .worker_server import WorkerServer
-from ..workbench import WorkbenchClient
+from .worker_server import WorkerServer, WorkbenchConnection
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +55,7 @@ class AgenticWorker(WorkerServer):
     def _system(self) -> str | None:
         return self.system_prompt or self.agent_card.description or None
 
-    async def run_task(self, context: RequestContext, event_queue: EventQueue, workbench: WorkbenchClient | None) -> None:
+    async def run_task(self, context: RequestContext, event_queue: EventQueue, workbench: WorkbenchConnection | None) -> None:
         task = context.current_task
         if task is None:
             task = new_task_from_user_message(context.message)
