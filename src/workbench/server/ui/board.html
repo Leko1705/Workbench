@@ -22,7 +22,10 @@
     <section class="feedcol">
       <div id="feed" class="feed" aria-live="polite"></div>
       <form id="compose" class="compose" autocomplete="off" hidden>
-        <textarea id="compose-text" rows="2" placeholder="Write as host…"></textarea>
+        <div class="compose-main">
+          <div id="mentions" class="chips mentions" hidden></div>
+          <textarea id="compose-text" rows="2" placeholder="Write as host…"></textarea>
+        </div>
         <button class="primary small" type="submit">Post</button>
       </form>
       <p id="compose-error" class="error pad" hidden></p>

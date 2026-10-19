@@ -292,3 +292,9 @@ table.auditlog { font-size: 12px; width: 100%; }
 .sidebar .rows li { flex-wrap: wrap; row-gap: 4px; }
 .sidebar .rows .grow { min-width: 70px; }
 @media (max-width: 1000px) { .sidebar { width: 100%; } }
+
+/* board: manage link, mention chips */
+.channels a.manage { padding: 4px 10px; font-size: 12px; color: var(--accent); text-decoration: none; }
+.compose-main { flex: 1; min-width: 0; }
+.mentions { margin-bottom: 6px; align-items: center; }
+.mentions[hidden] { display: none; }

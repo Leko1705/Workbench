@@ -12,7 +12,8 @@ let messages = [];            // everything loaded so far, oldest first
 let lastSeq = 0;
 let view = "all";             // "all" | "dms" | a channel name
 let channels = [];            // [{name, description}]
-let workers = new Map();      // id -> {name, has_icon}
+let workers = new Map();      // id -> {name, has_icon, status}
+let mentions = new Set();     // agents the next channel post names (wakes them)
 let stick = true;             // follow the newest message while the user is at the bottom
 
 const feed = $("feed");
@@ -62,11 +63,34 @@ function render1(m) {
 
 function renderAll() {
   feed.replaceChildren(...messages.filter(visible).map(render1));
-  if (!feed.children.length) feed.append(el("p", "muted pad", "Nothing here yet."));
+  if (!feed.children.length) feed.append(el("p", "muted pad", emptyText()));
   feed.scrollTop = feed.scrollHeight;
   stick = true;
   const writable = view !== "all" && view !== "dms";
   $("compose").hidden = !writable;
+  $("compose-text").placeholder = view.startsWith("@")
+    ? `Write to ${workerName(view.slice(1))}'s mailbox as host (this wakes the agent)…` : "Write as host…";
+  renderMentions();
+}
+
+function emptyText() {
+  if (view.startsWith("@")) return `No messages in ${workerName(view.slice(1))}'s mailbox yet. Messages sent to this agent appear here; you can write to it below.`;
+  if (view === "dms") return "No direct messages yet. Pick an agent under Private to see its mailbox.";
+  if (view === "all") return "Nothing has been posted yet.";
+  return `No messages in #${view} yet.`;
+}
+
+// agents a channel post can name: they are woken and get the message
+function renderMentions() {
+  const box = $("mentions");
+  const active = [...workers].filter(([, w]) => w.status === "active");
+  box.hidden = view.startsWith("@") || !active.length;
+  box.replaceChildren(el("span", "hint", "Wake:"), ...active.map(([id, w]) => {
+    const chip = el("button", `chip${mentions.has(id) ? " on" : ""}`, w.name);
+    chip.type = "button";
+    chip.addEventListener("click", () => { mentions.has(id) ? mentions.delete(id) : mentions.add(id); renderMentions(); });
+    return chip;
+  }));
 }
 
 function appendNew(fresh) {
@@ -91,18 +115,24 @@ function renderChannels() {
     b.addEventListener("click", () => { view = id; renderChannels(); renderAll(); });
     return b;
   };
+  const manage = el("a", "manage", "+ New channel");
+  manage.href = "settings.html#board";
+  manage.title = "Channels are created in Settings → Board";
   nav.replaceChildren(
     item("all", "All activity"),
     el("h3", "", "Channels"),
     ...channels.map(c => item(c.name, `# ${c.name}`, c.description)),
-    el("h3", "", "Private"),
-    item("dms", "✉ Mailboxes"));
+    manage,
+    el("h3", "", "Mailboxes"),
+    item("dms", "All mailboxes"),
+    ...[...workers].filter(([, w]) => w.status === "active")
+      .map(([id, w]) => item(`@${id}`, `✉ ${w.name}`, `${w.name}'s private mailbox`)));
 }
 
 // ------------------------------------------------------------------------ loading
 async function loadMeta() {
   const [ws, chs] = await Promise.all([api("GET", "/admin/workers"), api("GET", "/admin/board/channels")]);
-  workers = new Map(ws.map(w => [w.id, { name: w.name, has_icon: w.has_icon }]));
+  workers = new Map(ws.map(w => [w.id, { name: w.name, has_icon: w.has_icon, status: w.status }]));
   channels = chs;
   renderChannels();
 }
@@ -136,8 +166,10 @@ $("compose").addEventListener("submit", async ev => {
   if (!text) return;
   formError("compose-error");
   try {
-    await api("POST", `/admin/board/channels/${encodeURIComponent(view)}/messages`, { text });
+    const to = view.startsWith("@") ? [] : [...mentions];
+    await api("POST", `/admin/board/channels/${encodeURIComponent(view)}/messages`, { text, to });
     box.value = "";
+    mentions = new Set(); renderMentions();
   } catch (e) { formError("compose-error", e.message); }
 });
 
