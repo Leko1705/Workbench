@@ -127,6 +127,8 @@ class SecurityHeaders:
                 headers["Referrer-Policy"] = "no-referrer"
                 if path.startswith("/admin"):
                     headers["Cache-Control"] = "no-store"   # responses can contain secrets
+                else:
+                    headers["Cache-Control"] = "no-cache"   # the UI files change with the code: always revalidate (ETag)
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
