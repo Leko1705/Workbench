@@ -31,6 +31,10 @@ class ChannelIn(BaseModel):
     write_label_ids: list[str] = Field(default_factory=list, max_length=200)
 
 
+class WakeIn(BaseModel):
+    enabled: bool
+
+
 class ChannelPatch(BaseModel):
     description: str | None = Field(default=None, max_length=500)
     read_label_ids: list[str] | None = Field(default=None, max_length=200)
@@ -99,6 +103,13 @@ def build_board_routers(server: "WorkbenchServer", require_host: Callable[[Reque
         if not await store.delete_channel(name):
             raise HTTPException(404, "no such channel")
         return {"removed": name}
+
+    @admin.put("/workers/{worker_id}/wake")
+    async def set_wake(worker_id: str, body: WakeIn):
+        """Whether messages for this agent wake it (start or reach its board task)."""
+        if await store.update_worker(worker_id, board_wake=body.enabled) is None:
+            raise HTTPException(404, "no such worker")
+        return {"board_wake": body.enabled}
 
     @admin.get("/messages")
     async def admin_messages(after: int = 0, channel: str | None = None, limit: int = 200,

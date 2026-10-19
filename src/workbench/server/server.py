@@ -48,6 +48,7 @@ from ..extensions import BTW_EXTENSION_URI
 from ..join_token import encode_join_token
 from .board import Board
 from .board_api import build_board_routers
+from .wakeups import Wakeups
 from .settings_api import API_KEY_PREFIX, build_settings_router, hash_api_key
 from .store import InMemoryStore, Record, WorkbenchStore
 from .tasks import FINAL_STATES, TaskError, TaskManager, is_url_ok
@@ -136,7 +137,7 @@ async def _same(w: Record) -> Record:
 def _worker_view(w: Record) -> dict:        # never contains tokens
     return {**{k: w[k] for k in ("id", "name", "description", "version", "a2a_url",
                                  "status", "created_at")}, "skills": w.get("skills", []),
-            "label_ids": w.get("label_ids", []),
+            "label_ids": w.get("label_ids", []), "board_wake": w.get("board_wake", True),
             "has_icon": bool(w.get("icon_url"))}
 
 
@@ -157,6 +158,8 @@ class WorkbenchServer:
         self._public_url = ""
         self.tasks = TaskManager(self.store, lambda: self._public_url)
         self.board = Board(self.store)
+        self.wakeups = Wakeups(self.store, self.tasks)
+        self.board.listeners.append(self.wakeups.on_message)
         self._http = httpx.AsyncClient(timeout=3.0)      # reads workers' public agent cards and icons
         self._icons: dict[str, tuple[float, tuple[str, bytes] | None]] = {}
         self._allow_insecure_workers = False
@@ -646,6 +649,7 @@ class WorkbenchServer:
             await self.board.ensure_defaults()
             await tasks.recover()
             yield
+            await self.wakeups.close()
             await tasks.close()
             await self._http.aclose()
 
@@ -682,7 +686,7 @@ class WorkbenchServer:
             stored = await self.store.update_settings(name=self.name, description=self.description)
         self.apply_settings({k: stored[k] for k in
                              ("name", "description", "max_task_depth", "max_active_tasks",
-                              "board_rate_per_minute") if k in stored})
+                              "board_rate_per_minute", "board_wakeups_per_minute") if k in stored})
 
     def apply_settings(self, s: dict[str, Any]) -> None:
         """Take over (saved) settings: name, description and the task limits."""
@@ -691,6 +695,7 @@ class WorkbenchServer:
         self.tasks.max_depth = s.get("max_task_depth", self.tasks.max_depth)
         self.tasks.max_active = s.get("max_active_tasks", self.tasks.max_active)
         self.board.rate_per_minute = s.get("board_rate_per_minute", self.board.rate_per_minute)
+        self.wakeups.per_minute = s.get("board_wakeups_per_minute", self.wakeups.per_minute)
 
     # ------------------------------------------------------------ internals
     async def _activate(self, w: Record, *, deliver: bool = False) -> str:

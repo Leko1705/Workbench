@@ -180,10 +180,10 @@ function addEvent(e, taskNode) {
   const box = logBox();
   let node = null;
   if (e.type === "input") {
-    node = bubble("in", e.from === "host" ? "Task from host" : e.from === "api" ? "Task from an API client"
-                                                                    : "Task from an agent", e.text);
+    node = bubble("in", { host: "Task from host", api: "Task from an API client", board: "Task from the board",
+      agent: "Task from an agent" }[e.from] || "Task", e.text);
   } else if (e.type === "btw") {
-    node = bubble("in btw", `Message while working (${e.from === "host" ? "host" : e.from === "api" ? "API client" : "agent"})`, e.text);
+    node = bubble("in btw", `Message while working (${{ host: "host", api: "API client", board: "board", agent: "agent" }[e.from] || "?"})`, e.text);
   } else if (e.type === "btw_applied") {
     node = el("div", "msg state", "↳ the agent picked up the message");
   } else if (e.type === "state") {

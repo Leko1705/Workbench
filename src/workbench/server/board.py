@@ -18,7 +18,7 @@ import asyncio
 import re
 import time
 from collections import defaultdict, deque
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from . import labels as lbl
 from .store import Record, WorkbenchStore
@@ -66,6 +66,9 @@ class Board:
         self.rate_per_minute = rate_per_minute
         self._posts: dict[str, deque[float]] = defaultdict(deque)   # sender id -> recent post times
         self._cond = asyncio.Condition()
+        # called (in the background) with every stored message; see wakeups.py
+        self.listeners: list[Callable[[Record], Awaitable[None]]] = []
+        self._background: set[asyncio.Task] = set()
 
     async def ensure_defaults(self) -> None:
         if not await self.store.list_channels():
@@ -144,6 +147,10 @@ class Board:
             "to": recipients, "refs": [r for r in (refs or []) if isinstance(r, dict)][:10]})
         async with self._cond:
             self._cond.notify_all()
+        for listener in self.listeners:                 # never makes the post wait or fail
+            t = asyncio.create_task(listener(msg))
+            self._background.add(t)
+            t.add_done_callback(self._background.discard)
         return msg
 
     def _check_rate(self, caller: Caller) -> None:

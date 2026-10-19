@@ -59,6 +59,7 @@ async function renderGeneral(root) {
   const depth = input(s.max_task_depth, { type: "number", min: 1, max: 50, required: true });
   const active = input(s.max_active_tasks, { type: "number", min: 1, max: 10000, required: true });
   const rate = input(s.board_rate_per_minute, { type: "number", min: 1, max: 1000, required: true });
+  const wakes = input(s.board_wakeups_per_minute, { type: "number", min: 1, max: 600, required: true });
   const msg = notice();
   const save = el("button", "primary", "Save");
   save.type = "submit";
@@ -68,13 +69,15 @@ async function renderGeneral(root) {
     field("Maximum task depth", depth, "How deeply agents may delegate to sub-tasks."),
     field("Maximum running tasks", active, "Tasks running at the same time, in total."),
     field("Board: messages per minute", rate, "How often one agent may post to the board."),
+    field("Board: wake-ups per minute", wakes, "How many board tasks the workbench starts for one agent per minute " +
+      "when messages arrive for it. Further messages wait."),
     msg, save);
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     try {
       await api("PATCH", "/admin/settings", { name: name.value, description: desc.value,
         max_task_depth: +depth.value, max_active_tasks: +active.value,
-        board_rate_per_minute: +rate.value });
+        board_rate_per_minute: +rate.value, board_wakeups_per_minute: +wakes.value });
       msg.show("Saved.");
     } catch (e) { msg.show(e.status === 422 ? "Please check the values." : e.message, true); }
   });
@@ -235,7 +238,8 @@ async function renderLabels(root) {
 
 // ------------------------------------------------------------------- board
 async function renderBoard(root) {
-  const [channels, view] = await Promise.all([api("GET", "/admin/board/channels"), api("GET", "/admin/labels")]);
+  const [channels, view, workers] = await Promise.all([api("GET", "/admin/board/channels"),
+    api("GET", "/admin/labels"), api("GET", "/admin/workers")]);
   const labels = view.labels;
   const box = section("Board", "Channels are shared places where agents (and hosts) post messages. Only hosts " +
     "create channels. Who may read and write each one is decided by labels. Every agent also has a private " +
@@ -290,7 +294,23 @@ async function renderBoard(root) {
     }
     list.append(row);
   }
-  box.append(form, list, msg);
+  const wake = el("div", "card sform");
+  wake.append(el("h3", "plain", "Waking agents"),
+    el("p", "muted hint", "A message to an agent's mailbox, or one that names it, starts a board task for it " +
+      "(or reaches the one it is already running). Switch it off for agents that should only read the board " +
+      "when they choose to."));
+  for (const w of workers.filter(w => w.status === "active")) {
+    const row = el("label", "check wake-row");
+    const cb = el("input"); cb.type = "checkbox"; cb.checked = w.board_wake;
+    cb.addEventListener("change", async () => {
+      try { await api("PUT", `/admin/board/workers/${w.id}/wake`, { enabled: cb.checked }); msg.show("Saved."); }
+      catch (e) { cb.checked = !cb.checked; msg.show(e.message, true); }
+    });
+    row.append(cb, agentIcon(w.id, w.has_icon, true), document.createTextNode(` ${w.name}`));
+    wake.append(row);
+  }
+  if (!workers.some(w => w.status === "active")) wake.append(el("p", "muted", "No agents have joined yet."));
+  box.append(form, list, wake, msg);
   root.append(box);
 }
 

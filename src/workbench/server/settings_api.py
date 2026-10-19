@@ -24,6 +24,7 @@ class SettingsIn(BaseModel):
     max_task_depth: int | None = Field(default=None, ge=1, le=50)
     max_active_tasks: int | None = Field(default=None, ge=1, le=10_000)
     board_rate_per_minute: int | None = Field(default=None, ge=1, le=1000)
+    board_wakeups_per_minute: int | None = Field(default=None, ge=1, le=600)
 
     @field_validator("name")
     @classmethod
@@ -79,6 +80,7 @@ def build_settings_router(server: "WorkbenchServer", require_host, startup: dict
             "public_url": server.public_url,                      # fixed: workers know the workbench by it
             "max_task_depth": server.tasks.max_depth, "max_active_tasks": server.tasks.max_active,
             "board_rate_per_minute": server.board.rate_per_minute,
+            "board_wakeups_per_minute": server.wakeups.per_minute,
             "startup": startup,                                    # chosen when the server was started
         }
 

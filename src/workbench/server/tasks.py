@@ -66,6 +66,13 @@ def make_topic(text: str) -> str:
     return line if len(line) <= TOPIC_LEN else line[:TOPIC_LEN - 1].rstrip() + "…"
 
 
+def origin(requested_by: str | None) -> str:
+    """Who asked, for the event log: host, api (an API key), board (a board message) or agent."""
+    if requested_by in (None, "host"):
+        return "host"
+    return "api" if requested_by.startswith("key:") else "board" if requested_by == "board" else "agent"
+
+
 class TaskError(Exception):
     """A task request that must be refused. `status` is the suggested HTTP status."""
 
@@ -140,7 +147,7 @@ class TaskManager:
         }
         await self.store.add_task(rec)
         await self.store.append_event(tid, {"type": "input", "text": rec["input"],
-                                            "from": "host" if requested_by == "host" else "api" if requested_by.startswith("key:") else "agent"})
+                                            "from": origin(requested_by)})
         if parent is not None:
             await self.store.append_event(parent["id"], {
                 "type": "delegated", "child_id": tid, "agent": worker["name"], "topic": rec["topic"]})
@@ -183,7 +190,8 @@ class TaskManager:
                 await asyncio.wait_for(ev.wait(), timeout)
 
     # ------------------------------------------------------------------ run
-    async def send_message(self, task_id: str, text: str, *, requested_by: str | None = None) -> Record:
+    async def send_message(self, task_id: str, text: str, *, requested_by: str | None = None,
+                           source: str | None = None) -> Record:
         """Add a message to an unfinished task.
 
         * waiting for input (`input_required`/`auth_required`): the task resumes with it
@@ -202,20 +210,20 @@ class TaskManager:
             raise TaskError("the task has finished; start a new task with the same context_id", 409)
         worker = await self.store.get_worker(rec["worker_id"])
         if task_id in self._runners:
-            return await self._send_btw(rec, worker, text[:MAX_TEXT], requested_by)
+            return await self._send_btw(rec, worker, text[:MAX_TEXT], requested_by, source)
         if worker is None or worker["status"] != "active" or not rec["a2a_task_id"]:
             raise TaskError("the task cannot be continued", 409)
         rec = await self.store.update_task(task_id, state="working", status_text="",
                                            updated_at=time.time())
         await self.store.append_event(task_id, {
-            "type": "input", "text": text[:MAX_TEXT], "from": "host" if requested_by is None else "agent"})
+            "type": "input", "text": text[:MAX_TEXT], "from": source or origin(requested_by)})
         self._done[task_id] = asyncio.Event()
         self._runners[task_id] = asyncio.create_task(self._run(rec, worker, followup=text[:MAX_TEXT]),
                                                      name=f"task-{task_id}")
         return rec
 
     async def _send_btw(self, rec: Record, worker: Record | None, text: str,
-                        requested_by: str | None) -> Record:
+                        requested_by: str | None, source: str | None = None) -> Record:
         """Queue a message for a task that is running (see `BTW_EXTENSION_URI`)."""
         if worker is None or worker["status"] != "active":
             raise TaskError("the agent is no longer part of this workbench", 409)
@@ -240,7 +248,7 @@ class TaskManager:
                             409 if resp.status_code in (404, 409, 501) else 502)
         await self.store.append_event(rec["id"], {
             "type": "btw", "text": text,
-            "from": "host" if requested_by is None else "api" if requested_by.startswith("key:") else "agent"})
+            "from": source or origin(requested_by)})
         return await self.store.update_task(rec["id"], updated_at=time.time()) or rec
 
     async def _run(self, rec: Record, worker: Record, followup: str | None = None) -> None:
