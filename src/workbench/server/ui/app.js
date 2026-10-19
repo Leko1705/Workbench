@@ -125,6 +125,7 @@ function showLogin() {
 onUnauthorized = showLogin;
 mountSettingsIcon("settings-link");
 mountIcon("board-link", "board");
+mountIcon("files-link", "files");
 
 async function showApp() {
   $("login-view").hidden = true;

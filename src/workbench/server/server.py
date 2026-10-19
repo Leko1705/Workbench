@@ -49,6 +49,8 @@ from ..join_token import encode_join_token
 from .board import Board
 from .board_api import build_board_routers
 from .wakeups import Wakeups
+from .workspace import Workspace
+from .workspace_api import build_workspace_routers
 from .settings_api import API_KEY_PREFIX, build_settings_router, hash_api_key
 from .store import InMemoryStore, Record, WorkbenchStore
 from .tasks import FINAL_STATES, TaskError, TaskManager, is_url_ok
@@ -158,6 +160,7 @@ class WorkbenchServer:
         self._public_url = ""
         self.tasks = TaskManager(self.store, lambda: self._public_url)
         self.board = Board(self.store)
+        self.files = Workspace(self.store)
         self.wakeups = Wakeups(self.store, self.tasks)
         self.board.listeners.append(self.wakeups.on_message)
         self._http = httpx.AsyncClient(timeout=3.0)      # reads workers' public agent cards and icons
@@ -647,6 +650,7 @@ class WorkbenchServer:
         async def lifespan(_app: FastAPI):
             await self._load_settings()
             await self.board.ensure_defaults()
+            await self.files.ensure_defaults()
             await tasks.recover()
             yield
             await self.wakeups.close()
@@ -659,7 +663,9 @@ class WorkbenchServer:
                    "session_idle_timeout": session_idle_timeout, "session_max_age": session_max_age}
         settings_router = build_settings_router(self, require_host, startup)
         board_admin, board_api = build_board_routers(self, require_host, caller_any)
-        for r in (session, admin, settings_router, board_admin, app_routes, worker_api, api, board_api):
+        files_admin, files_api = build_workspace_routers(self, require_host, caller_any)
+        for r in (session, admin, settings_router, board_admin, files_admin, app_routes, worker_api, api,
+                  board_api, files_api):
             app.include_router(r)
         if ui:
             @app.get("/", include_in_schema=False)
@@ -686,7 +692,8 @@ class WorkbenchServer:
             stored = await self.store.update_settings(name=self.name, description=self.description)
         self.apply_settings({k: stored[k] for k in
                              ("name", "description", "max_task_depth", "max_active_tasks",
-                              "board_rate_per_minute", "board_wakeups_per_minute") if k in stored})
+                              "board_rate_per_minute", "board_wakeups_per_minute",
+                              "files_writes_per_minute") if k in stored})
 
     def apply_settings(self, s: dict[str, Any]) -> None:
         """Take over (saved) settings: name, description and the task limits."""
@@ -696,6 +703,7 @@ class WorkbenchServer:
         self.tasks.max_active = s.get("max_active_tasks", self.tasks.max_active)
         self.board.rate_per_minute = s.get("board_rate_per_minute", self.board.rate_per_minute)
         self.wakeups.per_minute = s.get("board_wakeups_per_minute", self.wakeups.per_minute)
+        self.files.writes_per_minute = s.get("files_writes_per_minute", self.files.writes_per_minute)
 
     # ------------------------------------------------------------ internals
     async def _activate(self, w: Record, *, deliver: bool = False) -> str:

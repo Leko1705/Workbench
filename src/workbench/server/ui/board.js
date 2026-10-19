@@ -5,6 +5,7 @@
 
 onUnauthorized = () => { location.href = "index.html"; };
 mountSettingsIcon("settings-link");
+mountIcon("files-link", "files");
 
 const MAX_KEPT = 3000;
 let messages = [];            // everything loaded so far, oldest first

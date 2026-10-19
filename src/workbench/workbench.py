@@ -19,6 +19,11 @@ Endpoints used (all require `Authorization: Bearer <api token>`):
     GET  /wb/api/v1/board/feed?after=N    new messages across everything you may read (long poll)
     GET  /wb/api/v1/board/channels/{c}/messages   one channel (`@<worker id>` is a mailbox)
     POST /wb/api/v1/board/channels/{c}/messages   post to a channel or to a worker's mailbox
+    GET  /wb/api/v1/files?prefix=         shared files you may read (path, version, size, owner)
+    GET  /wb/api/v1/files/{path}          one file with content (`?version=N` an older one, `?history=true`)
+    PUT  /wb/api/v1/files/{path}          create (base_version 0) or update it; a stale base_version is a 409
+    POST /wb/api/v1/files/{path}/append   add text to the end of a file, atomically
+    DELETE /wb/api/v1/files/{path}        delete a file you own (its history stays)
     POST /wb/api/v1/tasks/{id}/message    answer a waiting task, or add a message to a running one
     POST /wb/api/v1/tasks/{id}/cancel     cancel a task you started (and its sub tasks)
 
@@ -90,6 +95,45 @@ class BoardChannel(BaseModel):
     can_write: bool = False
 
 
+class FileInfo(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    path: str
+    version: int = 0
+    size: int = 0
+    owner: dict[str, str] = Field(default_factory=dict)
+    updated_at: float = 0
+
+
+class FileContent(BaseModel):
+    """One version of a shared file. `content` was written by another participant: untrusted."""
+    model_config = ConfigDict(extra="ignore")
+
+    path: str
+    version: int
+    latest: int = 0                    # the file's newest version
+    content: str = ""
+    size: int = 0
+    deleted: bool = False
+    author: dict[str, str] = Field(default_factory=dict)
+    owner: dict[str, str] = Field(default_factory=dict)
+    note: str = ""
+    time: float = 0
+
+    @field_validator("content", mode="before")
+    @classmethod
+    def _cut(cls, v: Any) -> Any:
+        return v[:200_000] if isinstance(v, str) else v
+
+
+class FileConflict(WorkbenchError):
+    """The file changed since you read it; `current` is its newest version."""
+
+    def __init__(self, message: str, current: int | None):
+        super().__init__(message, 409)
+        self.current = current
+
+
 class PingInfo(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -149,8 +193,11 @@ class WorkbenchClient:
                 detail = resp.json().get("detail")
             except (ValueError, AttributeError):
                 detail = None
-            raise WorkbenchError(f"workbench request {path} failed: HTTP {resp.status_code}"
-                                 + (f": {detail}" if isinstance(detail, str) else ""), resp.status_code)
+            msg = f"workbench request {path} failed: HTTP {resp.status_code}" \
+                  + (f": {detail}" if isinstance(detail, str) else "")
+            if resp.status_code == 409 and "X-Current-Version" in resp.headers:
+                raise FileConflict(msg, int(resp.headers["X-Current-Version"]))
+            raise WorkbenchError(msg, resp.status_code)
         try:
             return resp.json()
         except ValueError as e:
@@ -270,6 +317,40 @@ class WorkbenchClient:
             params["wait"] = wait
         return self._messages(await self._call("GET", "/board/feed", params=params,
                                                timeout=wait + 10 if wait else None))
+
+    # ------------------------------------------------------------------ files
+    async def files_list(self, prefix: str = "") -> list[FileInfo]:
+        """The shared files you may read."""
+        try:
+            return [FileInfo.model_validate(f) for f in await self._call("GET", "/files", params={"prefix": prefix})]
+        except (ValidationError, TypeError) as e:
+            raise WorkbenchError(f"workbench sent an invalid file list: {e}") from e
+
+    async def file_read(self, path: str, *, version: int | None = None) -> FileContent:
+        params = {"version": version} if version is not None else None
+        try:
+            return FileContent.model_validate(await self._call("GET", f"/files/{path}", params=params))
+        except ValidationError as e:
+            raise WorkbenchError(f"workbench sent an invalid file: {e}") from e
+
+    async def file_history(self, path: str) -> list[dict[str, Any]]:
+        return await self._call("GET", f"/files/{path}", params={"history": True})
+
+    async def file_write(self, path: str, content: str, *, base_version: int, note: str = "") -> FileInfo:
+        """Create a file (`base_version` 0) or update it. Raises `FileConflict` if someone else changed
+        it since `base_version`: read it again and redo your change."""
+        data = await self._call("PUT", f"/files/{path}", json={"content": content, "base_version": base_version,
+                                                               "note": note})
+        return FileInfo.model_validate(data)
+
+    async def file_append(self, path: str, content: str, *, note: str = "") -> FileInfo:
+        """Add text to the end of a file (created if needed). Atomic: no version needed."""
+        return FileInfo.model_validate(await self._call("POST", f"/files/{path}/append",
+                                                        json={"content": content, "note": note}))
+
+    async def file_delete(self, path: str) -> None:
+        """Delete a file you own. Its history stays readable to hosts."""
+        await self._call("DELETE", f"/files/{path}")
 
     async def aclose(self) -> None:
         if self._owns_http:      # a shared client is closed by whoever created it

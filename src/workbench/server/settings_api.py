@@ -25,6 +25,7 @@ class SettingsIn(BaseModel):
     max_active_tasks: int | None = Field(default=None, ge=1, le=10_000)
     board_rate_per_minute: int | None = Field(default=None, ge=1, le=1000)
     board_wakeups_per_minute: int | None = Field(default=None, ge=1, le=600)
+    files_writes_per_minute: int | None = Field(default=None, ge=1, le=1000)
 
     @field_validator("name")
     @classmethod
@@ -81,6 +82,7 @@ def build_settings_router(server: "WorkbenchServer", require_host, startup: dict
             "max_task_depth": server.tasks.max_depth, "max_active_tasks": server.tasks.max_active,
             "board_rate_per_minute": server.board.rate_per_minute,
             "board_wakeups_per_minute": server.wakeups.per_minute,
+            "files_writes_per_minute": server.files.writes_per_minute,
             "startup": startup,                                    # chosen when the server was started
         }
 
@@ -142,6 +144,15 @@ def build_settings_router(server: "WorkbenchServer", require_host, startup: dict
         if gated:        # removing it would turn a restricted channel into an open one
             raise HTTPException(409, "these board channels are restricted to this label only; change "
                                      "their access first: " + ", ".join(gated))
+        gated_ws = [w["name"] for w in await store.list_workspaces()
+                    if w["read_label_ids"] == [label_id] or w["write_label_ids"] == [label_id]]
+        if gated_ws:
+            raise HTTPException(409, "these file workspaces are restricted to this label only; change "
+                                     "their access first: " + ", ".join(gated_ws))
+        for w in await store.list_workspaces():
+            await store.update_workspace(w["name"],
+                                         read_label_ids=[x for x in w["read_label_ids"] if x != label_id],
+                                         write_label_ids=[x for x in w["write_label_ids"] if x != label_id])
         for c in await store.list_channels():
             await store.update_channel(c["name"],
                                        read_label_ids=[x for x in c["read_label_ids"] if x != label_id],

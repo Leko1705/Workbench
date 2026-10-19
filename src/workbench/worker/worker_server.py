@@ -74,7 +74,7 @@ from .tools import Tool, ToolError
 from .web_auth import SAFE_METHODS, LoginLimiter, SecurityHeaders, SessionStore, origin_allowed
 from ..extensions import BTW_EXTENSION_URI, BTW_PATH
 from ..join_token import decode_join_token
-from ..workbench import BoardChannel, BoardMessage, Participant, PingInfo, TaskInfo, WorkbenchClient, WorkbenchError
+from ..workbench import BoardChannel, BoardMessage, FileContent, FileInfo, Participant, PingInfo, TaskInfo, WorkbenchClient, WorkbenchError
 
 UI_DIR = Path(__file__).parent / "ui"
 WORKER_API = "/wb/worker/v1"
@@ -211,6 +211,21 @@ class WorkbenchConnection:
 
     async def board_feed(self, *, after: int = 0, wait: float = 0, limit: int = 100) -> list[BoardMessage]:
         return await self._api.board_feed(after=after, wait=wait, limit=limit)
+
+    async def files_list(self, prefix: str = "") -> list[FileInfo]:
+        return await self._api.files_list(prefix)
+
+    async def file_read(self, path: str, *, version: int | None = None) -> FileContent:
+        return await self._api.file_read(path, version=version)
+
+    async def file_write(self, path: str, content: str, *, base_version: int, note: str = "") -> FileInfo:
+        return await self._api.file_write(path, content, base_version=base_version, note=note)
+
+    async def file_append(self, path: str, content: str, *, note: str = "") -> FileInfo:
+        return await self._api.file_append(path, content, note=note)
+
+    async def file_delete(self, path: str) -> None:
+        await self._api.file_delete(path)
 
     async def ping(self) -> PingInfo:
         """Reachability and token check; raises `WorkbenchError` (see `WorkbenchClient.ping`)."""

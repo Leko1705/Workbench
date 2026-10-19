@@ -4,7 +4,8 @@ from a2a.server.agent_execution import RequestContext
 from a2a.server.events import EventQueue
 from .tools import Parameter, Tool, ToolError
 from .predef_tools import (BashTool, BoardChannelsTool, BoardPostTool, BoardReadTool, BoardWaitTool,
-                           DelegateTool, ListParticipantsTool)
+                           DelegateTool, ListParticipantsTool, WorkspaceAppendTool, WorkspaceListTool,
+                           WorkspaceReadTool, WorkspaceWriteTool)
 from .context import TaskContext, current_task_context
 from .llm_providers import (
 LLMProvider,

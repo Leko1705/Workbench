@@ -6,6 +6,7 @@ const SECTIONS = {
   general: { render: renderGeneral },
   labels: { render: renderLabels },
   board: { render: renderBoard },
+  files: { render: renderFiles },
   "api-keys": { render: renderApiKeys },
 };
 let current = null;
@@ -59,6 +60,7 @@ async function renderGeneral(root) {
   const depth = input(s.max_task_depth, { type: "number", min: 1, max: 50, required: true });
   const active = input(s.max_active_tasks, { type: "number", min: 1, max: 10000, required: true });
   const rate = input(s.board_rate_per_minute, { type: "number", min: 1, max: 1000, required: true });
+  const writes = input(s.files_writes_per_minute, { type: "number", min: 1, max: 1000, required: true });
   const wakes = input(s.board_wakeups_per_minute, { type: "number", min: 1, max: 600, required: true });
   const msg = notice();
   const save = el("button", "primary", "Save");
@@ -69,6 +71,7 @@ async function renderGeneral(root) {
     field("Maximum task depth", depth, "How deeply agents may delegate to sub-tasks."),
     field("Maximum running tasks", active, "Tasks running at the same time, in total."),
     field("Board: messages per minute", rate, "How often one agent may post to the board."),
+    field("Files: writes per minute", writes, "How often one agent may write or delete shared files."),
     field("Board: wake-ups per minute", wakes, "How many board tasks the workbench starts for one agent per minute " +
       "when messages arrive for it. Further messages wait."),
     msg, save);
@@ -77,7 +80,8 @@ async function renderGeneral(root) {
     try {
       await api("PATCH", "/admin/settings", { name: name.value, description: desc.value,
         max_task_depth: +depth.value, max_active_tasks: +active.value,
-        board_rate_per_minute: +rate.value, board_wakeups_per_minute: +wakes.value });
+        board_rate_per_minute: +rate.value, board_wakeups_per_minute: +wakes.value,
+        files_writes_per_minute: +writes.value });
       msg.show("Saved.");
     } catch (e) { msg.show(e.status === 422 ? "Please check the values." : e.message, true); }
   });
@@ -236,6 +240,40 @@ async function renderLabels(root) {
   root.append(box);
 }
 
+// One row per channel / workspace: its name, a delete button and who may read and write it.
+function accessRows(items, labels, o) {
+  return items.map(c => {
+    const row = el("div", "chan-row");
+    const head = el("div", "chan-head");
+    head.append(el("strong", "", o.title(c)), el("span", "muted", c.description || ""));
+    head.append(button("Delete", "danger", async () => {
+      if (!window.confirm(`Delete ${o.noun(c)}?`)) return;
+      try { await api("DELETE", o.url(c)); await o.reload(); } catch (e) { o.msg.show(e.message, true); }
+    }));
+    row.append(head);
+    for (const [key, title] of [["read_label_ids", "Read"], ["write_label_ids", "Write"]]) {
+      const line = el("div", "agent-row");
+      line.append(el("span", "agent-name", title));
+      const chips = el("span", "chips");
+      if (!c[key].length) chips.append(el("span", "hint", "everyone"));
+      for (const l of labels) {
+        const on = c[key].includes(l.id);
+        const chip = el("button", `chip${on ? " on" : ""}`, l.name);
+        chip.type = "button";
+        chip.setAttribute("aria-pressed", on);
+        chip.addEventListener("click", async () => {
+          const ids = on ? c[key].filter(x => x !== l.id) : [...c[key], l.id];
+          try { await api("PATCH", o.url(c), { [key]: ids }); await o.reload(); } catch (e) { o.msg.show(e.message, true); }
+        });
+        chips.append(chip);
+      }
+      line.append(chips);
+      row.append(line);
+    }
+    return row;
+  });
+}
+
 // ------------------------------------------------------------------- board
 async function renderBoard(root) {
   const [channels, view, workers] = await Promise.all([api("GET", "/admin/board/channels"),
@@ -262,38 +300,10 @@ async function renderBoard(root) {
   const list = el("div", "card sform");
   list.append(el("h3", "plain", "Channels"),
     el("p", "muted hint", "Labels you select limit who may read or write. With none selected, everyone may."));
-  for (const c of channels) {
-    const row = el("div", "chan-row");
-    const head = el("div", "chan-head");
-    head.append(el("strong", "", `# ${c.name}`), el("span", "muted", c.description || ""));
-    head.append(button("Delete", "danger", async () => {
-      if (!window.confirm(`Delete #${c.name} and all its messages?`)) return;
-      try { await api("DELETE", `/admin/board/channels/${encodeURIComponent(c.name)}`); await reload(); }
-      catch (e) { msg.show(e.message, true); }
-    }));
-    row.append(head);
-    for (const [key, title] of [["read_label_ids", "Read"], ["write_label_ids", "Write"]]) {
-      const line = el("div", "agent-row");
-      line.append(el("span", "agent-name", title));
-      const chips = el("span", "chips");
-      if (!c[key].length) chips.append(el("span", "hint", "everyone"));
-      for (const l of labels) {
-        const on = c[key].includes(l.id);
-        const chip = el("button", `chip${on ? " on" : ""}`, l.name);
-        chip.type = "button";
-        chip.setAttribute("aria-pressed", on);
-        chip.addEventListener("click", async () => {
-          const ids = on ? c[key].filter(x => x !== l.id) : [...c[key], l.id];
-          try { await api("PATCH", `/admin/board/channels/${encodeURIComponent(c.name)}`, { [key]: ids }); await reload(); }
-          catch (e) { msg.show(e.message, true); }
-        });
-        chips.append(chip);
-      }
-      line.append(chips);
-      row.append(line);
-    }
-    list.append(row);
-  }
+  list.append(...accessRows(channels, labels, {
+    title: c => `# ${c.name}`, url: c => `/admin/board/channels/${encodeURIComponent(c.name)}`,
+    noun: c => `#${c.name} and all its messages`, reload, msg }));
+
   const wake = el("div", "card sform");
   wake.append(el("h3", "plain", "Waking agents"),
     el("p", "muted hint", "A message to an agent's mailbox, or one that names it, starts a board task for it " +
@@ -311,6 +321,37 @@ async function renderBoard(root) {
   }
   if (!workers.some(w => w.status === "active")) wake.append(el("p", "muted", "No agents have joined yet."));
   box.append(form, list, wake, msg);
+  root.append(box);
+}
+
+// ------------------------------------------------------------------- files
+async function renderFiles(root) {
+  const [spaces, view] = await Promise.all([api("GET", "/admin/workspaces"), api("GET", "/admin/labels")]);
+  const box = section("Files", "Workspaces are the top-level folders of the shared files. Only hosts create them. " +
+    "Labels decide who may read and write each one. Every change adds a version, nothing is overwritten, and only a " +
+    "file's owner (or a host) can delete it. Browse them on the Files page.");
+  const reload = async () => { await show(current, true); };
+  const msg = notice();
+
+  const form = el("form", "card sform");
+  const name = input("", { placeholder: "e.g. reports", maxLength: 40, required: true, pattern: "[a-z0-9][a-z0-9_-]*" });
+  const desc = input("", { placeholder: "What is this workspace for?", maxLength: 500 });
+  const add = el("button", "primary", "Create workspace"); add.type = "submit";
+  form.append(el("h3", "plain", "New workspace"), field("Name", name, "Lowercase letters, digits, - and _."),
+              field("Description", desc), add);
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    try { await api("POST", "/admin/workspaces", { name: name.value, description: desc.value }); await reload(); }
+    catch (e) { msg.show(e.message, true); }
+  });
+
+  const list = el("div", "card sform");
+  list.append(el("h3", "plain", "Workspaces"),
+    el("p", "muted hint", "Labels you select limit who may read or write. With none selected, everyone may."));
+  list.append(...accessRows(spaces, view.labels, {
+    title: w => `${w.name}/`, url: w => `/admin/workspaces/${encodeURIComponent(w.name)}`,
+    noun: w => `the workspace ${w.name} with all its files and their history`, reload, msg }));
+  box.append(form, list, msg);
   root.append(box);
 }
 

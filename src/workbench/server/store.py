@@ -23,6 +23,12 @@ Record shapes (the server only relies on the fields named here):
   message  {"seq", "time", "channel", "sender": {"kind": "worker"|"host"|"api", "id", "name"},
             "kind", "text", "to": [worker ids], "refs": [{"type", "id"}]}
             `seq` counts up over all channels together, so one cursor can follow everything.
+  workspace {"name", "description", "read_label_ids", "write_label_ids", "created_at"}
+            The top-level folders of the shared files; empty label lists mean "every label".
+  file     {"path", "workspace", "version", "deleted", "owner": {kind, id, name}, "size",
+            "created_at", "updated_at"}   head of a file; `version` is the latest one
+  file version {"path", "version", "content", "size", "deleted", "author": {kind, id, name},
+            "note", "time"}   append-only: an edit or a delete adds a version, nothing is overwritten
   label    {"id", "name", "created_at"}   a cluster of workers; workers carry `label_ids` (at least one)
   api_key  {"id", "name", "prefix", "key_hash", "created_at", "last_used_at"}
   settings {"name", "description", "max_task_depth", "max_active_tasks",
@@ -40,6 +46,14 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 Record = dict[str, Any]
+
+
+class VersionConflict(Exception):
+    """A file changed since the writer last read it. `current` is its latest version."""
+
+    def __init__(self, current: int):
+        super().__init__(f"the file is at version {current}")
+        self.current = current
 
 
 class WorkbenchStore(ABC):
@@ -167,6 +181,51 @@ class WorkbenchStore(ABC):
         """Messages with `seq` > `after` (oldest first), optionally only from `channels`.
         With `newest` the last `limit` matching messages instead of the first ones."""
 
+    # ------------------------------------------------------------ file spaces
+    @abstractmethod
+    async def add_workspace(self, space: Record) -> None: ...
+
+    @abstractmethod
+    async def get_workspace(self, name: str) -> Record | None: ...
+
+    @abstractmethod
+    async def list_workspaces(self) -> list[Record]: ...
+
+    @abstractmethod
+    async def update_workspace(self, name: str, **fields: Any) -> Record | None: ...
+
+    @abstractmethod
+    async def delete_workspace(self, name: str) -> bool:
+        """Delete the workspace with all its files and their history."""
+
+    # ------------------------------------------------------------------ files
+    @abstractmethod
+    async def get_file(self, path: str) -> Record | None:
+        """The file's head (including deleted ones), or None if it never existed."""
+
+    @abstractmethod
+    async def list_files(self, *, workspace: str | None = None, prefix: str = "",
+                         include_deleted: bool = False) -> list[Record]:
+        """File heads sorted by path."""
+
+    @abstractmethod
+    async def get_version(self, path: str, version: int | None = None) -> Record | None:
+        """One version of a file with its content (the latest if `version` is None)."""
+
+    @abstractmethod
+    async def list_versions(self, path: str, limit: int = 100) -> list[Record]:
+        """Versions without their content, newest first."""
+
+    @abstractmethod
+    async def append_version(self, path: str, version: Record, *, expected: int | None,
+                             owner: dict[str, str]) -> Record:
+        """Atomically add the next version of a file and return its new head.
+
+        `expected` is the version the writer based its change on: 0 means "the file must not
+        exist (or be deleted)", None skips the check. Raises `VersionConflict` otherwise.
+        `owner` becomes the file's owner when it is created (or re-created after a delete).
+        """
+
     # ----------------------------------------------------------------- events
     @abstractmethod
     async def append_event(self, task_id: str, event: Record) -> None:
@@ -182,6 +241,9 @@ class InMemoryStore(WorkbenchStore):
         self._workers: dict[str, Record] = {}
         self._invites: dict[str, Record] = {}
         self._tasks: dict[str, Record] = {}
+        self._workspaces: dict[str, Record] = {}
+        self._files: dict[str, Record] = {}
+        self._versions: dict[str, list[Record]] = {}
         self._channels: dict[str, Record] = {}
         self._messages: list[Record] = []
         self._message_seq = 0
@@ -307,6 +369,69 @@ class InMemoryStore(WorkbenchStore):
     async def update_settings(self, **fields):
         self._settings.update(copy.deepcopy(fields))
         return copy.deepcopy(self._settings)
+
+    # file spaces and files
+    MAX_VERSIONS = 200          # kept per file; the oldest are dropped
+
+    async def add_workspace(self, space):
+        self._workspaces[space["name"]] = copy.deepcopy(space)
+
+    async def get_workspace(self, name):
+        return self._out(self._workspaces.get(name))
+
+    async def list_workspaces(self):
+        return [self._out(w) for w in self._workspaces.values()]
+
+    async def update_workspace(self, name, **fields):
+        w = self._workspaces.get(name)
+        if w is not None:
+            w.update(copy.deepcopy(fields))
+        return self._out(w)
+
+    async def delete_workspace(self, name):
+        existed = self._workspaces.pop(name, None) is not None
+        for path in [p for p, f in self._files.items() if f["workspace"] == name]:
+            del self._files[path]
+            self._versions.pop(path, None)
+        return existed
+
+    async def get_file(self, path):
+        return self._out(self._files.get(path))
+
+    async def list_files(self, *, workspace=None, prefix="", include_deleted=False):
+        return [self._out(f) for p, f in sorted(self._files.items())
+                if (workspace is None or f["workspace"] == workspace) and p.startswith(prefix)
+                and (include_deleted or not f["deleted"])]
+
+    async def get_version(self, path, version=None):
+        versions = self._versions.get(path, [])
+        for v in reversed(versions):
+            if version is None or v["version"] == version:
+                return self._out(v)
+        return None
+
+    async def list_versions(self, path, limit=100):
+        return [{k: v for k, v in rec.items() if k != "content"}
+                for rec in reversed(self._versions.get(path, [])[-limit:])]
+
+    async def append_version(self, path, version, *, expected, owner):
+        head = self._files.get(path)
+        current = head["version"] if head and not head["deleted"] else 0
+        if expected is not None and expected != current:
+            raise VersionConflict(head["version"] if head else 0)
+        now = time.time()
+        number = (head["version"] if head else 0) + 1
+        rec = {**copy.deepcopy(version), "path": path, "version": number, "time": now}
+        self._versions.setdefault(path, []).append(rec)
+        if len(self._versions[path]) > self.MAX_VERSIONS:
+            del self._versions[path][0]
+        fresh = head is None or head["deleted"]
+        self._files[path] = {
+            "path": path, "workspace": path.split("/", 1)[0], "version": number,
+            "deleted": bool(rec["deleted"]), "size": rec["size"],
+            "owner": copy.deepcopy(owner) if fresh else head["owner"],
+            "created_at": now if head is None else head["created_at"], "updated_at": now}
+        return copy.deepcopy(self._files[path])
 
     # board
     MAX_MESSAGES = 20_000      # in total; the oldest are dropped
