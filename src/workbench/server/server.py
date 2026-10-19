@@ -48,6 +48,8 @@ from ..extensions import BTW_EXTENSION_URI
 from ..join_token import encode_join_token
 from .board import Board
 from .board_api import build_board_routers
+from .governance import Audit, AdminAudit, Monitor, actor
+from .governance_api import build_governance_router
 from .wakeups import Wakeups
 from .workspace import Workspace
 from .workspace_api import build_workspace_routers
@@ -140,6 +142,7 @@ def _worker_view(w: Record) -> dict:        # never contains tokens
     return {**{k: w[k] for k in ("id", "name", "description", "version", "a2a_url",
                                  "status", "created_at")}, "skills": w.get("skills", []),
             "label_ids": w.get("label_ids", []), "board_wake": w.get("board_wake", True),
+            "paused": bool(w.get("paused")),
             "has_icon": bool(w.get("icon_url"))}
 
 
@@ -163,6 +166,14 @@ class WorkbenchServer:
         self.files = Workspace(self.store)
         self.wakeups = Wakeups(self.store, self.tasks)
         self.board.listeners.append(self.wakeups.on_message)
+        # governance: pause state, audit log, monitor (see governance.py)
+        self.paused = False
+        self.audit = Audit(self.store)
+        self.monitor = Monitor(self.store, self.audit, self.pause_agents)
+        self.tasks.gate = self.wakeups.gate = self.block_reason
+        self.board.listeners.append(self._on_board_message)
+        self.files.listeners.append(self._on_file)
+        self.tasks.on_start.append(self._on_task_start)
         self._http = httpx.AsyncClient(timeout=3.0)      # reads workers' public agent cards and icons
         self._icons: dict[str, tuple[float, tuple[str, bytes] | None]] = {}
         self._allow_insecure_workers = False
@@ -267,10 +278,15 @@ class WorkbenchServer:
                 if k is not None:
                     if k["last_used_at"] is None or time.time() - k["last_used_at"] > 60:
                         await store.update_api_key(k["id"], last_used_at=time.time())
+                    if self.paused:
+                        raise HTTPException(423, "the workbench is paused by a host")
                     return {"id": f"key:{k['id']}", "kind": "key", "record": k}
             elif scheme.lower() == "bearer" and token:
                 w = await store.find_worker(token_hash=_hash(token))
                 if w is not None and w["status"] == "active":
+                    reason = self.block_reason(w)
+                    if reason:
+                        raise HTTPException(423, reason)
                     return {"id": w["id"], "kind": "worker", "record": w}
             raise HTTPException(401, "invalid token")
 
@@ -515,6 +531,8 @@ class WorkbenchServer:
                  "poll_token_hash": _hash(poll_token), "pending_token": None, "label_ids": [],
                  "invite_id": inv["id"], "created_at": time.time()}
             await store.add_worker(w)
+            await self.audit.record(actor("worker", w["id"], w["name"]), "worker.join",
+                                    f"asked to join with invite {inv['label'] or inv['id'][:8]}")
             if inv["auto_approve"]:
                 return {"status": "accepted", "workbench_token": await self._activate(w, deliver=True)}
             return {"status": "pending", "request_id": w["request_id"], "poll_token": poll_token,
@@ -538,6 +556,7 @@ class WorkbenchServer:
         @worker_api.post("/leave")
         async def leave(request: Request):
             w = await caller_worker(request)
+            await self.audit.record(actor("worker", w["id"], w["name"]), "worker.leave", "left the workbench")
             await self._remove_worker(w["id"])
             return {"ok": True}
 
@@ -599,6 +618,7 @@ class WorkbenchServer:
             if me["kind"] == "worker" and not lbl.may_communicate(
                     await lbl.communication(store), me["record"].get("label_ids", []),
                     target.get("label_ids", [])):
+                await self.monitor.note(me["id"], "denied")
                 raise HTTPException(403, f"the label rules do not allow you to give work to {target['name']!r}")
             parent = None
             if body.parent_task_id and me["kind"] == "key":
@@ -611,6 +631,8 @@ class WorkbenchServer:
                 t = await tasks.start(target, body.text, requested_by=me["id"], parent=parent,
                                       context_id=body.context_id)
             except TaskError as e:
+                if e.status == 429 and me["kind"] == "worker":
+                    await self.monitor.note(me["id"], "ratelimit")
                 raise HTTPException(e.status, str(e)) from e
             return agent_task_view(t)
 
@@ -643,6 +665,8 @@ class WorkbenchServer:
         async def agent_cancel_task(task_id: str, request: Request):
             me = await caller_any(request)
             await own_task(task_id, me)
+            await self.audit.record(actor(me["kind"], me["id"], me["record"]["name"]), "task.cancel",
+                                    f"cancelled task {task_id[:8]}")
             return {"canceled": await tasks.cancel(task_id)}
 
         # ------------------------------------------------------ assemble
@@ -658,14 +682,16 @@ class WorkbenchServer:
             await self._http.aclose()
 
         app = FastAPI(title="Workbench", lifespan=lifespan)
+        app.add_middleware(AdminAudit, audit=self.audit)
         app.add_middleware(SecurityHeaders)
         startup = {"allow_insecure_workers": allow_insecure_workers,
                    "session_idle_timeout": session_idle_timeout, "session_max_age": session_max_age}
         settings_router = build_settings_router(self, require_host, startup)
         board_admin, board_api = build_board_routers(self, require_host, caller_any)
         files_admin, files_api = build_workspace_routers(self, require_host, caller_any)
-        for r in (session, admin, settings_router, board_admin, files_admin, app_routes, worker_api, api,
-                  board_api, files_api):
+        governance_router = build_governance_router(self, require_host)
+        for r in (session, admin, settings_router, board_admin, files_admin, governance_router, app_routes,
+                  worker_api, api, board_api, files_api):
             app.include_router(r)
         if ui:
             @app.get("/", include_in_schema=False)
@@ -693,7 +719,8 @@ class WorkbenchServer:
         self.apply_settings({k: stored[k] for k in
                              ("name", "description", "max_task_depth", "max_active_tasks",
                               "board_rate_per_minute", "board_wakeups_per_minute",
-                              "files_writes_per_minute") if k in stored})
+                              "files_writes_per_minute", "max_tasks_per_agent", "task_starts_per_hour",
+                              "auto_pause_on_alert", "paused") if k in stored})
 
     def apply_settings(self, s: dict[str, Any]) -> None:
         """Take over (saved) settings: name, description and the task limits."""
@@ -704,6 +731,70 @@ class WorkbenchServer:
         self.board.rate_per_minute = s.get("board_rate_per_minute", self.board.rate_per_minute)
         self.wakeups.per_minute = s.get("board_wakeups_per_minute", self.wakeups.per_minute)
         self.files.writes_per_minute = s.get("files_writes_per_minute", self.files.writes_per_minute)
+        self.tasks.max_per_agent = s.get("max_tasks_per_agent", self.tasks.max_per_agent)
+        self.tasks.starts_per_hour = s.get("task_starts_per_hour", self.tasks.starts_per_hour)
+        self.monitor.auto_pause = s.get("auto_pause_on_alert", self.monitor.auto_pause)
+        self.paused = s.get("paused", self.paused)
+
+    # ------------------------------------------------------------ governance
+    def block_reason(self, worker: Record | None) -> str | None:
+        """Why this worker may not act or receive work right now (None: it may)."""
+        if self.paused:
+            return "the workbench is paused by a host"
+        if worker is not None and worker.get("paused"):
+            return "this agent is paused by a host"
+        return None
+
+    async def pause_agents(self, ids: list[str], why: str) -> None:
+        for wid in ids:
+            w = await self.store.update_worker(wid, paused=True)
+            if w is not None:
+                await self.audit.record(actor("system", "governance", "governance"), "pause.agent",
+                                        f"paused {w['name']} ({why})")
+
+    async def set_paused(self, paused: bool) -> None:
+        self.paused = paused
+        await self.store.update_settings(paused=paused)
+
+    async def stop_agent(self, worker_id: str) -> None:
+        """Pause an agent and cancel its work: tasks it runs and tasks it started."""
+        await self.store.update_worker(worker_id, paused=True)
+        await self.tasks.cancel_worker_tasks(worker_id)
+        await self.tasks.cancel_requested_by(worker_id)
+
+    async def stop_everything(self) -> None:
+        await self.set_paused(True)
+        await self.tasks.cancel_all()
+
+    async def _on_board_message(self, msg: Record) -> None:
+        s = msg["sender"]
+        if s["kind"] != "host":                            # host changes are logged by the middleware
+            where = "a mailbox" if msg["channel"].startswith("@") else f"#{msg['channel']}"
+            await self.audit.record(actor(s["kind"], s["id"], s["name"]), "board.post",
+                                    f"posted to {where} (message {msg['seq']})")
+        await self.monitor.on_message(msg)
+
+    async def _on_file(self, path: str, head: Record, caller, deleted: bool) -> None:
+        if caller.kind != "host":
+            await self.audit.record(actor(caller.kind, caller.id, caller.name),
+                                    "file.delete" if deleted else "file.write",
+                                    f"{'deleted' if deleted else 'wrote'} {path} (version {head['version']})")
+
+    async def _on_task_start(self, rec: Record) -> None:
+        by = rec["requested_by"]
+        if by == "host":
+            return
+        if by == "board":
+            who = actor("system", "board", "board wake-up")
+        elif by.startswith("key:"):
+            k = next((x for x in await self.store.list_api_keys() if f"key:{x['id']}" == by), None)
+            who = actor("api", by, k["name"] if k else "API key")
+        else:
+            w = await self.store.get_worker(by)
+            who = actor("worker", by, w["name"] if w else by)
+        target = await self.store.get_worker(rec["worker_id"])
+        await self.audit.record(who, "task.start",
+                                f"started a task for {target['name'] if target else '?'}: {rec['topic']}")
 
     # ------------------------------------------------------------ internals
     async def _activate(self, w: Record, *, deliver: bool = False) -> str:

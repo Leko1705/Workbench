@@ -55,6 +55,12 @@ def build_board_routers(server: "WorkbenchServer", require_host: Callable[[Reque
     def fail(e: BoardError) -> HTTPException:
         return HTTPException(e.status, str(e))
 
+    async def reject(who: Caller, e: BoardError) -> HTTPException:
+        """The HTTP error for a refused request; refusals of a worker feed the monitor."""
+        if who.kind == "worker" and e.status in (403, 404, 429):
+            await server.monitor.note(who.id, "ratelimit" if e.status == 429 else "denied")
+        return fail(e)
+
     async def api_caller(request: Request) -> Caller:
         me = await caller_any(request)
         if me["kind"] == "worker":
@@ -142,11 +148,12 @@ def build_board_routers(server: "WorkbenchServer", require_host: Callable[[Reque
     @api.post("/channels/{name}/messages")
     async def post_message(name: str, body: PostIn, request: Request):
         """Post to a channel, or to a worker's mailbox (`@<worker id>`)."""
+        who = await api_caller(request)
         try:
-            return message_view(await board.post(name, await api_caller(request), body.text,
-                                                 kind=body.kind, to=body.to, refs=body.refs))
+            return message_view(await board.post(name, who, body.text, kind=body.kind, to=body.to,
+                                                 refs=body.refs))
         except BoardError as e:
-            raise fail(e) from e
+            raise await reject(who, e) from e
 
     @api.get("/channels/{name}/messages")
     async def read_channel(name: str, request: Request, after: int = 0, wait: float = 0,
@@ -161,7 +168,7 @@ def build_board_routers(server: "WorkbenchServer", require_host: Callable[[Reque
                 msgs = await board.wait(who, channel=name, after=after, timeout=min(wait, MAX_WAIT),
                                         limit=limit)
         except BoardError as e:
-            raise fail(e) from e
+            raise await reject(who, e) from e
         return [message_view(m) for m in msgs]
 
     @api.get("/feed")
@@ -171,7 +178,7 @@ def build_board_routers(server: "WorkbenchServer", require_host: Callable[[Reque
         try:
             msgs = await board.wait(who, channel=None, after=after, timeout=min(wait, MAX_WAIT), limit=limit)
         except BoardError as e:
-            raise fail(e) from e
+            raise await reject(who, e) from e
         return [message_view(m) for m in msgs]
 
     return admin, api

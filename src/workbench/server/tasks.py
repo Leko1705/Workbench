@@ -18,8 +18,8 @@ import re
 import logging
 import time
 import uuid
-from collections import defaultdict
-from typing import Any, Callable
+from collections import defaultdict, deque
+from typing import Any, Awaitable, Callable
 from urllib.parse import urlparse
 
 import httpx
@@ -95,6 +95,12 @@ class TaskManager:
         self._runners: dict[str, asyncio.Task] = {}
         self._done: dict[str, asyncio.Event] = {}
         self._canceled: set[str] = set()
+        self.gate: Callable[[Record | None], str | None] = lambda worker: None   # pause check (governance)
+        self.max_per_agent = 20                 # tasks running on one agent at once
+        self.starts_per_hour = 300              # tasks one agent / API key may start per hour
+        self._starts: dict[str, deque[float]] = defaultdict(deque)
+        self._runner_worker: dict[str, str] = {}
+        self.on_start: list[Callable[[Record], Awaitable[None]]] = []
         self._notified: set[str] = set()        # finished children already reported to their parent
         self._polling: dict[str, int] = {}      # task id -> requester polls currently in flight
         self._last_poll: dict[str, float] = {}  # task id -> when a requester last polled it
@@ -125,6 +131,18 @@ class TaskManager:
         """
         if worker["status"] != "active":
             raise TaskError("that agent is not active in this workbench", 409)
+        reason = self.gate(worker)
+        if reason:
+            raise TaskError(reason, 423)
+        if sum(1 for w in self._runner_worker.values() if w == worker["id"]) >= self.max_per_agent:
+            raise TaskError(f"that agent already has {self.max_per_agent} tasks running", 429)
+        if requested_by not in ("host", "board"):          # hosts and board wake-ups are not budgeted
+            q, now = self._starts[requested_by], time.monotonic()
+            while q and now - q[0] > 3600:
+                q.popleft()
+            if len(q) >= self.starts_per_hour:
+                raise TaskError(f"you may start at most {self.starts_per_hour} tasks per hour", 429)
+            q.append(now)
         if not text.strip():
             raise TaskError("text must not be empty")
         depth = 0
@@ -152,7 +170,10 @@ class TaskManager:
             await self.store.append_event(parent["id"], {
                 "type": "delegated", "child_id": tid, "agent": worker["name"], "topic": rec["topic"]})
         self._done[tid] = asyncio.Event()
+        self._runner_worker[tid] = worker["id"]
         self._runners[tid] = asyncio.create_task(self._run(rec, worker), name=f"task-{tid}")
+        for listener in self.on_start:
+            await listener(rec)
         return rec
 
     def is_running(self, task_id: str) -> bool:
@@ -218,6 +239,7 @@ class TaskManager:
         await self.store.append_event(task_id, {
             "type": "input", "text": text[:MAX_TEXT], "from": source or origin(requested_by)})
         self._done[task_id] = asyncio.Event()
+        self._runner_worker[task_id] = worker["id"]
         self._runners[task_id] = asyncio.create_task(self._run(rec, worker, followup=text[:MAX_TEXT]),
                                                      name=f"task-{task_id}")
         return rec
@@ -304,6 +326,7 @@ class TaskManager:
             await flush(error=f"{type(e).__name__}: {e}"[:2000])
         finally:
             self._runners.pop(tid, None)
+            self._runner_worker.pop(tid, None)
             if state in FINAL_STATES and tid not in self._canceled:
                 await self._report_to_parent(tid)
             ev = self._done.get(tid)
@@ -416,6 +439,20 @@ class TaskManager:
         if ev is not None:
             ev.set()
         return True
+
+    async def cancel_requested_by(self, worker_id: str) -> None:
+        """Cancel the unfinished tasks a worker (or API key id) started, with their sub tasks."""
+        for t in await self.store.list_tasks():
+            if t["requested_by"] == worker_id and t["state"] not in FINAL_STATES:
+                await self.cancel(t["id"])
+
+    async def cancel_all(self) -> None:
+        for t in await self.store.list_tasks(roots_only=True):
+            if t["state"] not in FINAL_STATES:
+                await self.cancel(t["id"])
+        for t in await self.store.list_tasks():             # unfinished sub tasks whose root already ended
+            if t["state"] not in FINAL_STATES:
+                await self.cancel(t["id"])
 
     async def cancel_worker_tasks(self, worker_id: str) -> None:
         """Cancel everything a worker is working on (it left or was removed)."""

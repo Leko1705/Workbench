@@ -265,3 +265,30 @@ pre.fcontent { background: var(--panel); border: 1px solid var(--line); border-r
   white-space: pre-wrap; word-break: break-word; font: 13px ui-monospace, monospace; }
 .fedit { font: 13px ui-monospace, monospace; margin-bottom: 8px; }
 .fbox input { margin-bottom: 8px; }
+
+/* ---- governance ---- */
+.badge.paused { background: var(--bad); }
+.tasks-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.tasks-head h2 { margin: 0; }
+.banner { background: color-mix(in srgb, var(--bad) 14%, var(--panel)); border: 1px solid var(--bad); color: var(--text);
+  border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.icon-btn { position: relative; }
+.count { position: absolute; top: -6px; right: -8px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--bad); color: #fff; font-size: 10px; line-height: 16px; text-align: center; }
+.tabs .count { position: static; display: inline-block; margin-left: 4px; }
+.alert { margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.alert.critical { border-color: var(--bad); }
+.alert.warning { border-color: var(--warn); }
+.alert.ack { opacity: .6; }
+.alert p { margin: 0; }
+table.auditlog td.left { text-align: left; white-space: normal; }
+table.auditlog { font-size: 12px; width: 100%; }
+
+/* roomier sidebar rows and header now that agents have more controls */
+.sidebar { width: 310px; }
+.sidebar header { flex-wrap: wrap; gap: 8px; }
+.head-actions { gap: 10px; }
+.head-actions .link { white-space: nowrap; font-size: 15px; }
+.sidebar .rows li { flex-wrap: wrap; row-gap: 4px; }
+.sidebar .rows .grow { min-width: 70px; }
+@media (max-width: 1000px) { .sidebar { width: 100%; } }

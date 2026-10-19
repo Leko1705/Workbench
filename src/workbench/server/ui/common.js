@@ -78,6 +78,7 @@ const ICONS = {   // 24x24 stroke icons, each a list of path data
   hourglass: ["M6 2h12", "M6 22h12", "M7 2v4.5l5 5.5-5 5.5V22", "M17 2v4.5L12 12l5 5.5V22"],
   parallel: ["M5 4l9 8-9 8z", "M19 5v14"],
   board: ["M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"],
+  shield: ["M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"],
   files: ["M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"],
   person: ["M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2", "M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"],
   code: ["M16 18l6-6-6-6", "M8 6l-6 6 6 6"],

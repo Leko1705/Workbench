@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import time
 from collections import defaultdict, deque
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from .board import NAME_RE, Caller
 from .store import Record, VersionConflict, WorkbenchStore
@@ -55,6 +55,8 @@ class Workspace:
         self.store = store
         self.writes_per_minute = writes_per_minute
         self._writes: dict[str, deque[float]] = defaultdict(deque)
+        # called after every stored version: (path, head, caller, deleted)
+        self.listeners: list[Callable[[str, Record, Caller, bool], Awaitable[None]]] = []
 
     async def ensure_defaults(self) -> None:
         if not await self.store.list_workspaces():
@@ -121,9 +123,12 @@ class Workspace:
     async def _add(self, path: str, caller: Caller, content: str, *, expected: int | None, note: str,
                    deleted: bool = False) -> Record:
         try:
-            return await self.store.append_version(path, {
+            head = await self.store.append_version(path, {
                 "content": content, "size": len(content), "deleted": deleted,
                 "author": caller.sender, "note": note[:200]}, expected=expected, owner=caller.sender)
+            for listener in self.listeners:
+                await listener(path, head, caller, deleted)
+            return head
         except VersionConflict as e:
             raise WorkspaceError(f"the file changed: it is at version {e.current} now. Read it again and "
                                  "apply your change to that version.", 409, current=e.current) from e

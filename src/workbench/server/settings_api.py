@@ -26,6 +26,9 @@ class SettingsIn(BaseModel):
     board_rate_per_minute: int | None = Field(default=None, ge=1, le=1000)
     board_wakeups_per_minute: int | None = Field(default=None, ge=1, le=600)
     files_writes_per_minute: int | None = Field(default=None, ge=1, le=1000)
+    max_tasks_per_agent: int | None = Field(default=None, ge=1, le=1000)
+    task_starts_per_hour: int | None = Field(default=None, ge=1, le=100_000)
+    auto_pause_on_alert: bool | None = None
 
     @field_validator("name")
     @classmethod
@@ -83,6 +86,9 @@ def build_settings_router(server: "WorkbenchServer", require_host, startup: dict
             "board_rate_per_minute": server.board.rate_per_minute,
             "board_wakeups_per_minute": server.wakeups.per_minute,
             "files_writes_per_minute": server.files.writes_per_minute,
+            "max_tasks_per_agent": server.tasks.max_per_agent,
+            "task_starts_per_hour": server.tasks.starts_per_hour,
+            "auto_pause_on_alert": server.monitor.auto_pause,
             "startup": startup,                                    # chosen when the server was started
         }
 

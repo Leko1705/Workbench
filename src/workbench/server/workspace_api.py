@@ -62,6 +62,11 @@ def build_workspace_routers(server: "WorkbenchServer", require_host: Callable[[R
         # a conflict names the current version so the writer can re-read and retry
         return HTTPException(e.status, str(e), headers={"X-Current-Version": str(e.current)} if e.current is not None else None)
 
+    async def reject(who: Caller, e: WorkspaceError) -> HTTPException:
+        if who.kind == "worker" and e.status in (403, 404, 429):
+            await server.monitor.note(who.id, "ratelimit" if e.status == 429 else "denied")
+        return fail(e)
+
     async def api_caller(request: Request) -> Caller:
         me = await caller_any(request)
         if me["kind"] == "worker":
@@ -157,31 +162,34 @@ def build_workspace_routers(server: "WorkbenchServer", require_host: Callable[[R
                 return await ws.history(path, who)
             return version_view(await ws.read(path, who, version=version))
         except WorkspaceError as e:
-            raise fail(e) from e
+            raise await reject(who, e) from e
 
     @api.put("/{path:path}")
     async def write_file(path: str, body: WriteIn, request: Request):
         """Create (base_version 0) or update a file; a stale base_version answers 409."""
+        who = await api_caller(request)
         try:
-            return head_view(await ws.write(path, await api_caller(request), body.content,
-                                            base_version=body.base_version, note=body.note))
+            return head_view(await ws.write(path, who, body.content, base_version=body.base_version,
+                                            note=body.note))
         except WorkspaceError as e:
-            raise fail(e) from e
+            raise await reject(who, e) from e
 
     @api.post("/{path:path}/append")
     async def append_file(path: str, body: AppendIn, request: Request):
         """Add text to the end of a file (created if needed), atomically."""
+        who = await api_caller(request)
         try:
-            return head_view(await ws.append(path, await api_caller(request), body.content, note=body.note))
+            return head_view(await ws.append(path, who, body.content, note=body.note))
         except WorkspaceError as e:
-            raise fail(e) from e
+            raise await reject(who, e) from e
 
     @api.delete("/{path:path}")
     async def delete_file(path: str, request: Request):
         """Delete a file you own (its history stays)."""
+        who = await api_caller(request)
         try:
-            return head_view(await ws.delete(path, await api_caller(request)))
+            return head_view(await ws.delete(path, who))
         except WorkspaceError as e:
-            raise fail(e) from e
+            raise await reject(who, e) from e
 
     return admin, api

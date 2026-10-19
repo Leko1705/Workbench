@@ -10,7 +10,13 @@ function renderWorkers(workers) {
     const name = el("span", "grow", w.name);
     const skills = (w.skills || []).map(k => k.name || k.id).join(", ");
     name.title = [w.description, skills && `Skills: ${skills}`, w.a2a_url].filter(Boolean).join("\n");
-    li.append(name, el("span", `badge ${w.status}`, w.status));
+    li.append(name, el("span", `badge ${w.paused ? "paused" : w.status}`, w.paused ? "paused" : w.status));
+    if (w.status === "active") {
+      li.append(button(w.paused ? "Resume" : "Pause", "", () => act("PUT", `/admin/workers/${w.id}/pause`, { paused: !w.paused })));
+      if (w.paused) li.append(button("Cancel work", "danger", () => {
+        if (window.confirm(`Cancel everything ${w.name} is working on or has started?`)) act("POST", `/admin/workers/${w.id}/stop`);
+      }));
+    }
     if (w.status === "pending") {
       li.append(button("Approve", "", () => act("POST", `/admin/workers/${w.id}/approve`)),
                 button("Deny", "danger", () => act("POST", `/admin/workers/${w.id}/deny`)));
@@ -59,15 +65,20 @@ function renderRoots(roots) {
   $("roots-empty").hidden = roots.length > 0;
 }
 
-async function act(method, path) {
-  try { await api(method, path); } catch (e) { formError("task-error", e.message); }
+async function act(method, path, body) {
+  try { await api(method, path, body); } catch (e) { formError("task-error", e.message); }
   await refresh();
 }
 
 async function refresh() {
   try {
-    const [workers, invites, roots] = await Promise.all([
-      api("GET", "/admin/workers"), api("GET", "/admin/invites"), api("GET", "/admin/tasks")]);
+    const [workers, invites, roots, gov] = await Promise.all([
+      api("GET", "/admin/workers"), api("GET", "/admin/invites"), api("GET", "/admin/tasks"),
+      api("GET", "/admin/governance")]);
+    $("paused-banner").hidden = !gov.paused;
+    $("stop-all").hidden = gov.paused;
+    const n = $("alert-count");
+    n.textContent = gov.alerts; n.hidden = !gov.alerts;
     renderWorkers(workers);
     renderInvites(invites);
     renderRoots(roots);
@@ -86,6 +97,12 @@ $("task-form").addEventListener("submit", async ev => {
   } catch (e) { formError("task-error", e.message); }
   finally { btn.disabled = false; }
 });
+
+$("stop-all").addEventListener("click", async () => {
+  if (!window.confirm("Pause the whole workbench and cancel every unfinished task?")) return;
+  await act("POST", "/admin/stop-all");
+});
+$("resume-all").addEventListener("click", () => act("POST", "/admin/pause", { paused: false }));
 
 $("copy-token").addEventListener("click", async () => {
   try {
@@ -123,6 +140,12 @@ function showLogin() {
   $("login-view").hidden = false;
 }
 onUnauthorized = showLogin;
+(function () {   // the shield icon goes before the alert count
+  const svg = svgEl("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": "2",
+    "stroke-linecap": "round", "stroke-linejoin": "round" });
+  drawIcon(svg, "shield");
+  $("audit-link").prepend(svg);
+})();
 mountSettingsIcon("settings-link");
 mountIcon("board-link", "board");
 mountIcon("files-link", "files");

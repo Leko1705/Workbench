@@ -24,6 +24,7 @@
       <header>
         <h2 id="wb-name">Workbench</h2>
         <span class="head-actions">
+          <a id="audit-link" class="icon-btn" href="audit.html" title="Audit and alerts" aria-label="Audit and alerts"><span id="alert-count" class="count" hidden></span></a>
           <a id="files-link" class="icon-btn" href="files.html" title="Files" aria-label="Files"></a>
           <a id="board-link" class="icon-btn" href="board.html" title="Board" aria-label="Board"></a>
           <a id="settings-link" class="icon-btn" href="settings.html" title="Settings" aria-label="Settings"></a>
@@ -58,7 +59,14 @@
     </aside>
 
     <section class="main">
-      <h2>Tasks</h2>
+      <div id="paused-banner" class="banner" role="alert" hidden>
+        <strong>The workbench is paused.</strong> Agents cannot act and no tasks are started.
+        <button id="resume-all" class="mini" type="button">Resume</button>
+      </div>
+      <div class="tasks-head">
+        <h2>Tasks</h2>
+        <button id="stop-all" class="mini danger" type="button" title="Pause everything and cancel all unfinished tasks">Emergency stop</button>
+      </div>
       <ul id="roots" class="roots"></ul>
       <p id="roots-empty" class="muted" hidden>No tasks yet. Start one on the right.</p>
     </section>

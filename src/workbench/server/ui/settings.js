@@ -61,6 +61,10 @@ async function renderGeneral(root) {
   const active = input(s.max_active_tasks, { type: "number", min: 1, max: 10000, required: true });
   const rate = input(s.board_rate_per_minute, { type: "number", min: 1, max: 1000, required: true });
   const writes = input(s.files_writes_per_minute, { type: "number", min: 1, max: 1000, required: true });
+  const perAgent = input(s.max_tasks_per_agent, { type: "number", min: 1, max: 1000, required: true });
+  const perHour = input(s.task_starts_per_hour, { type: "number", min: 1, max: 100000, required: true });
+  const auto = el("input"); auto.type = "checkbox"; auto.checked = s.auto_pause_on_alert;
+  const autoLabel = el("label", "check"); autoLabel.append(auto, document.createTextNode(" Pause agents automatically when a critical alert fires (e.g. a message loop)"));
   const wakes = input(s.board_wakeups_per_minute, { type: "number", min: 1, max: 600, required: true });
   const msg = notice();
   const save = el("button", "primary", "Save");
@@ -71,6 +75,9 @@ async function renderGeneral(root) {
     field("Maximum task depth", depth, "How deeply agents may delegate to sub-tasks."),
     field("Maximum running tasks", active, "Tasks running at the same time, in total."),
     field("Board: messages per minute", rate, "How often one agent may post to the board."),
+    field("Tasks running on one agent", perAgent, "More are refused until some finish."),
+    field("Tasks one agent may start per hour", perHour, "Hosts and board wake-ups are not counted."),
+    autoLabel,
     field("Files: writes per minute", writes, "How often one agent may write or delete shared files."),
     field("Board: wake-ups per minute", wakes, "How many board tasks the workbench starts for one agent per minute " +
       "when messages arrive for it. Further messages wait."),
@@ -81,7 +88,8 @@ async function renderGeneral(root) {
       await api("PATCH", "/admin/settings", { name: name.value, description: desc.value,
         max_task_depth: +depth.value, max_active_tasks: +active.value,
         board_rate_per_minute: +rate.value, board_wakeups_per_minute: +wakes.value,
-        files_writes_per_minute: +writes.value });
+        files_writes_per_minute: +writes.value, max_tasks_per_agent: +perAgent.value,
+        task_starts_per_hour: +perHour.value, auto_pause_on_alert: auto.checked });
       msg.show("Saved.");
     } catch (e) { msg.show(e.status === 422 ? "Please check the values." : e.message, true); }
   });

@@ -29,6 +29,8 @@ Record shapes (the server only relies on the fields named here):
             "created_at", "updated_at"}   head of a file; `version` is the latest one
   file version {"path", "version", "content", "size", "deleted", "author": {kind, id, name},
             "note", "time"}   append-only: an edit or a delete adds a version, nothing is overwritten
+  audit    {"seq", "time", "actor": {kind, id, name}, "action", "summary"}   append-only log of who did what
+  alert    {"id", "time", "severity", "kind", "agent_ids", "text", "acknowledged"}   raised by the monitor
   label    {"id", "name", "created_at"}   a cluster of workers; workers carry `label_ids` (at least one)
   api_key  {"id", "name", "prefix", "key_hash", "created_at", "last_used_at"}
   settings {"name", "description", "max_task_depth", "max_active_tasks",
@@ -226,6 +228,27 @@ class WorkbenchStore(ABC):
         `owner` becomes the file's owner when it is created (or re-created after a delete).
         """
 
+    # ---------------------------------------------------------- audit and alerts
+    @abstractmethod
+    async def append_audit(self, entry: Record) -> Record:
+        """Store an audit entry; the store assigns `seq` and `time`."""
+
+    @abstractmethod
+    async def list_audit(self, *, after: int = 0, limit: int = 200, newest: bool = False,
+                         actor: str | None = None, action: str | None = None) -> list[Record]:
+        """Entries with `seq` > `after`, oldest first (or the newest `limit`). `actor` matches an actor
+        id or name, `action` an action prefix."""
+
+    @abstractmethod
+    async def add_alert(self, alert: Record) -> None: ...
+
+    @abstractmethod
+    async def list_alerts(self, *, include_acknowledged: bool = False) -> list[Record]:
+        """Alerts, newest first."""
+
+    @abstractmethod
+    async def acknowledge_alert(self, alert_id: str) -> bool: ...
+
     # ----------------------------------------------------------------- events
     @abstractmethod
     async def append_event(self, task_id: str, event: Record) -> None:
@@ -241,6 +264,9 @@ class InMemoryStore(WorkbenchStore):
         self._workers: dict[str, Record] = {}
         self._invites: dict[str, Record] = {}
         self._tasks: dict[str, Record] = {}
+        self._audit: list[Record] = []
+        self._audit_seq = 0
+        self._alerts: list[Record] = []
         self._workspaces: dict[str, Record] = {}
         self._files: dict[str, Record] = {}
         self._versions: dict[str, list[Record]] = {}
@@ -369,6 +395,40 @@ class InMemoryStore(WorkbenchStore):
     async def update_settings(self, **fields):
         self._settings.update(copy.deepcopy(fields))
         return copy.deepcopy(self._settings)
+
+    # audit and alerts
+    MAX_AUDIT = 20_000
+    MAX_ALERTS = 500
+
+    async def append_audit(self, entry):
+        self._audit_seq += 1
+        rec = {**copy.deepcopy(entry), "seq": self._audit_seq, "time": time.time()}
+        self._audit.append(rec)
+        if len(self._audit) > self.MAX_AUDIT:
+            del self._audit[0]
+        return copy.deepcopy(rec)
+
+    async def list_audit(self, *, after=0, limit=200, newest=False, actor=None, action=None):
+        found = [e for e in self._audit if e["seq"] > after
+                 and (actor is None or actor in (e["actor"].get("id"), e["actor"].get("name")))
+                 and (action is None or e["action"].startswith(action))]
+        found = found[-limit:] if newest else found[:limit]
+        return [copy.deepcopy(e) for e in found]
+
+    async def add_alert(self, alert):
+        self._alerts.append(copy.deepcopy(alert))
+        if len(self._alerts) > self.MAX_ALERTS:
+            del self._alerts[0]
+
+    async def list_alerts(self, *, include_acknowledged=False):
+        return [copy.deepcopy(a) for a in reversed(self._alerts) if include_acknowledged or not a["acknowledged"]]
+
+    async def acknowledge_alert(self, alert_id):
+        for a in self._alerts:
+            if a["id"] == alert_id:
+                a["acknowledged"] = True
+                return True
+        return False
 
     # file spaces and files
     MAX_VERSIONS = 200          # kept per file; the oldest are dropped

@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Audit – Workbench</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="common.js" defer></script>
+  <script src="audit.js" defer></script>
+</head>
+<body class="settings-page">
+  <header class="topbar">
+    <a href="index.html" class="back">← Tasks</a>
+    <h1>Audit and alerts</h1>
+    <nav class="tabs" id="tabs">
+      <button type="button" data-tab="alerts" class="sel">Alerts <span id="alert-count" class="count" hidden></span></button>
+      <button type="button" data-tab="log">Audit log</button>
+      <button type="button" data-tab="about">What is controlled</button>
+    </nav>
+  </header>
+  <main class="scontent" id="content"></main>
+</body>
+</html>

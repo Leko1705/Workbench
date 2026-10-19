@@ -57,6 +57,7 @@ class Wakeups:
         self._pending: dict[str, list[Record]] = {}
         self._loops: dict[str, asyncio.Task] = {}
         self._starts: dict[str, deque[float]] = defaultdict(deque)
+        self.gate = lambda worker: None         # pause check (governance): no wake-ups while paused
 
     async def on_message(self, msg: Record) -> None:
         """Board listener: queue the message for every active agent it is meant for."""
@@ -64,7 +65,7 @@ class Wakeups:
             if wid == msg["sender"].get("id"):
                 continue
             w = await self.store.get_worker(wid)
-            if w is None or w["status"] != "active" or not w.get("board_wake", True):
+            if w is None or w["status"] != "active" or not w.get("board_wake", True) or self.gate(w):
                 continue
             self._pending.setdefault(wid, []).append(msg)
             loop = self._loops.get(wid)
@@ -99,6 +100,9 @@ class Wakeups:
                 if time.monotonic() > deadline:
                     log.warning("giving up on %d board message(s) for %s", len(self._pending[wid]), wid)
                     break
+                if self.gate(worker):                           # paused meanwhile: hold the messages
+                    await asyncio.sleep(3)
+                    continue
                 batch = self._pending[wid][:BATCH]
                 text = wake_text(batch, lambda c: "your mailbox" if c.startswith("@") else f"#{c}")
                 try:
