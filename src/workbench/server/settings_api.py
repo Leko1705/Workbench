@@ -23,6 +23,7 @@ class SettingsIn(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     max_task_depth: int | None = Field(default=None, ge=1, le=50)
     max_active_tasks: int | None = Field(default=None, ge=1, le=10_000)
+    board_rate_per_minute: int | None = Field(default=None, ge=1, le=1000)
 
     @field_validator("name")
     @classmethod
@@ -77,6 +78,7 @@ def build_settings_router(server: "WorkbenchServer", require_host, startup: dict
             "name": server.name, "description": server.description, "version": server.version,
             "public_url": server.public_url,                      # fixed: workers know the workbench by it
             "max_task_depth": server.tasks.max_depth, "max_active_tasks": server.tasks.max_active,
+            "board_rate_per_minute": server.board.rate_per_minute,
             "startup": startup,                                    # chosen when the server was started
         }
 
@@ -133,6 +135,15 @@ def build_settings_router(server: "WorkbenchServer", require_host, startup: dict
         if stranded:
             raise HTTPException(409, "every agent needs a label; give these another one first: "
                                      + ", ".join(stranded))
+        gated = [c["name"] for c in await store.list_channels()
+                 if c["read_label_ids"] == [label_id] or c["write_label_ids"] == [label_id]]
+        if gated:        # removing it would turn a restricted channel into an open one
+            raise HTTPException(409, "these board channels are restricted to this label only; change "
+                                     "their access first: " + ", ".join(gated))
+        for c in await store.list_channels():
+            await store.update_channel(c["name"],
+                                       read_label_ids=[x for x in c["read_label_ids"] if x != label_id],
+                                       write_label_ids=[x for x in c["write_label_ids"] if x != label_id])
         for w in workers:
             if label_id in w.get("label_ids", []):
                 await store.update_worker(w["id"], label_ids=[x for x in w["label_ids"] if x != label_id])

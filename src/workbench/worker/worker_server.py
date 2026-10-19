@@ -74,7 +74,7 @@ from .tools import Tool, ToolError
 from .web_auth import SAFE_METHODS, LoginLimiter, SecurityHeaders, SessionStore, origin_allowed
 from ..extensions import BTW_EXTENSION_URI, BTW_PATH
 from ..join_token import decode_join_token
-from ..workbench import Participant, PingInfo, TaskInfo, WorkbenchClient, WorkbenchError
+from ..workbench import BoardChannel, BoardMessage, Participant, PingInfo, TaskInfo, WorkbenchClient, WorkbenchError
 
 UI_DIR = Path(__file__).parent / "ui"
 WORKER_API = "/wb/worker/v1"
@@ -196,6 +196,21 @@ class WorkbenchConnection:
     async def send_message(self, task_id: str, text: str) -> TaskInfo:
         """Add a message to a task you started (answers a waiting task, or reaches a running one)."""
         return await self._api.send_message(task_id, text)
+
+    async def board_channels(self) -> list[BoardChannel]:
+        return await self._api.board_channels()
+
+    async def board_post(self, channel: str, text: str, *, kind: str = "post",
+                         to: list[str] | None = None) -> BoardMessage:
+        """Post to a board channel, or to a worker's mailbox (`@<worker id>`)."""
+        return await self._api.board_post(channel, text, kind=kind, to=to)
+
+    async def board_read(self, channel: str, *, after: int = 0, wait: float = 0, limit: int = 100,
+                         newest: bool = False) -> list[BoardMessage]:
+        return await self._api.board_read(channel, after=after, wait=wait, limit=limit, newest=newest)
+
+    async def board_feed(self, *, after: int = 0, wait: float = 0, limit: int = 100) -> list[BoardMessage]:
+        return await self._api.board_feed(after=after, wait=wait, limit=limit)
 
     async def ping(self) -> PingInfo:
         """Reachability and token check; raises `WorkbenchError` (see `WorkbenchClient.ping`)."""

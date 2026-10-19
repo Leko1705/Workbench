@@ -46,6 +46,8 @@ from pydantic import BaseModel, Field, field_validator
 from . import labels as lbl
 from ..extensions import BTW_EXTENSION_URI
 from ..join_token import encode_join_token
+from .board import Board
+from .board_api import build_board_routers
 from .settings_api import API_KEY_PREFIX, build_settings_router, hash_api_key
 from .store import InMemoryStore, Record, WorkbenchStore
 from .tasks import FINAL_STATES, TaskError, TaskManager, is_url_ok
@@ -154,6 +156,7 @@ class WorkbenchServer:
         self.store: WorkbenchStore = store or InMemoryStore()
         self._public_url = ""
         self.tasks = TaskManager(self.store, lambda: self._public_url)
+        self.board = Board(self.store)
         self._http = httpx.AsyncClient(timeout=3.0)      # reads workers' public agent cards and icons
         self._icons: dict[str, tuple[float, tuple[str, bytes] | None]] = {}
         self._allow_insecure_workers = False
@@ -640,6 +643,7 @@ class WorkbenchServer:
         @asynccontextmanager
         async def lifespan(_app: FastAPI):
             await self._load_settings()
+            await self.board.ensure_defaults()
             await tasks.recover()
             yield
             await tasks.close()
@@ -650,7 +654,8 @@ class WorkbenchServer:
         startup = {"allow_insecure_workers": allow_insecure_workers,
                    "session_idle_timeout": session_idle_timeout, "session_max_age": session_max_age}
         settings_router = build_settings_router(self, require_host, startup)
-        for r in (session, admin, settings_router, app_routes, worker_api, api):
+        board_admin, board_api = build_board_routers(self, require_host, caller_any)
+        for r in (session, admin, settings_router, board_admin, app_routes, worker_api, api, board_api):
             app.include_router(r)
         if ui:
             @app.get("/", include_in_schema=False)
@@ -676,7 +681,8 @@ class WorkbenchServer:
         if "name" not in stored:
             stored = await self.store.update_settings(name=self.name, description=self.description)
         self.apply_settings({k: stored[k] for k in
-                             ("name", "description", "max_task_depth", "max_active_tasks") if k in stored})
+                             ("name", "description", "max_task_depth", "max_active_tasks",
+                              "board_rate_per_minute") if k in stored})
 
     def apply_settings(self, s: dict[str, Any]) -> None:
         """Take over (saved) settings: name, description and the task limits."""
@@ -684,6 +690,7 @@ class WorkbenchServer:
         self.description = s.get("description", self.description)
         self.tasks.max_depth = s.get("max_task_depth", self.tasks.max_depth)
         self.tasks.max_active = s.get("max_active_tasks", self.tasks.max_active)
+        self.board.rate_per_minute = s.get("board_rate_per_minute", self.board.rate_per_minute)
 
     # ------------------------------------------------------------ internals
     async def _activate(self, w: Record, *, deliver: bool = False) -> str:

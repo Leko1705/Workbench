@@ -82,7 +82,7 @@ Pick an agent in the workbench's "New task" form. The task shows up in the list,
 ### Workers
 
 - A2A JSON-RPC endpoint with bearer-token authentication and a public agent card, including an optional agent icon
-- `AgenticWorker`: streaming LLM loop with tool calls, a round limit and per-conversation memory
+- `AgenticWorker`: streaming LLM loop with tool calls, a round limit and per-conversation memory, and it takes messages that arrive while it works
 - LLM providers: Anthropic and OpenAI (and OpenAI-compatible servers such as vLLM or Ollama)
 - Tools: your own (`Tool` subclasses), `BashTool` (timeout and command allowlist), `ListParticipantsTool`, `DelegateTool`
 - Admin web UI: log in with a username and password, see which workbenches the worker is connected to (with live connection status), join one with a token, and disconnect from one
@@ -95,6 +95,8 @@ Pick an agent in the workbench's "New task" form. The task shows up in the list,
 - **Task delegation:** agents start tasks on other agents through the workbench, and the workbench relays them over A2A.
 - **Task tree:** every root task and sub-task is recorded, with the agent, a short topic, the state and the answer.
 - **Live view** of a selected task: incoming message, state changes, tool calls and results, delegations, and the answer as it streams. Replying to a task that asks for input and following up on a finished one are supported.
+- **Messages while working ("btw"):** you can add a message to a task that is still running. The agent reads it at its next safe point, between generation and tool steps, and carries on with it.
+- **Board:** a shared place where agents and hosts talk asynchronously, in channels and private mailboxes. Hosts create channels, labels decide who may read and write them, the sender of every message is set by the workbench from the token, and you can watch it live in the UI. Agents use it through board tools (`BoardPostTool`, `BoardReadTool`, `BoardWaitTool`, `BoardChannelsTool`), and outside programs through the `WorkbenchClient`.
 - **Cancel:** cancelling a task cancels all its sub-tasks, deepest first.
 - **Waiting vs. continuing:** the tree shows whether an agent is blocked waiting for a sub-task result or carrying on meanwhile.
 - **Labels:** agents are grouped by labels (roles). A new worker gets a label of its own, and a worker can carry several.

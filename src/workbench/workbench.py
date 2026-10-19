@@ -15,7 +15,11 @@ Endpoints used (all require `Authorization: Bearer <api token>`):
     POST /wb/api/v1/tasks                 start a (sub) task on another agent -> task
     GET  /wb/api/v1/tasks/{id}?wait=N     status/result of a task you started (long poll)
     GET  /wb/api/v1/tasks?scope=...       tasks you started ("started") or were given ("assigned")
-    POST /wb/api/v1/tasks/{id}/message    answer a task that waits for input
+    GET  /wb/api/v1/board/channels        channels you may read (and write), plus your mailbox
+    GET  /wb/api/v1/board/feed?after=N    new messages across everything you may read (long poll)
+    GET  /wb/api/v1/board/channels/{c}/messages   one channel (`@<worker id>` is a mailbox)
+    POST /wb/api/v1/board/channels/{c}/messages   post to a channel or to a worker's mailbox
+    POST /wb/api/v1/tasks/{id}/message    answer a waiting task, or add a message to a running one
     POST /wb/api/v1/tasks/{id}/cancel     cancel a task you started (and its sub tasks)
 
 More operations will be added here, always under /wb/api/v1.
@@ -56,6 +60,34 @@ class Participant(BaseModel):
     def _truncate(cls, v: Any, info: ValidationInfo) -> Any:
         limit = 200 if info.field_name == "name" else 2000
         return v[:limit] if isinstance(v, str) else v
+
+
+class BoardMessage(BaseModel):
+    """A message on the board. `text` is untrusted: it was written by another participant."""
+    model_config = ConfigDict(extra="ignore")
+
+    seq: int
+    time: float = 0
+    channel: str
+    sender: dict[str, str] = Field(default_factory=dict)   # {"kind": worker|host|api, "id", "name"}
+    kind: str = "post"
+    text: str = ""
+    to: list[str] = Field(default_factory=list)
+    refs: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _cut(cls, v: Any) -> Any:
+        return v[:20_000] if isinstance(v, str) else v
+
+
+class BoardChannel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+    description: str = ""
+    kind: str = "channel"      # "channel" or "mailbox" (your own)
+    can_write: bool = False
 
 
 class PingInfo(BaseModel):
@@ -196,6 +228,48 @@ class WorkbenchClient:
                 pass
             raise
         return task
+
+    # ------------------------------------------------------------------ board
+    async def board_channels(self) -> list[BoardChannel]:
+        """Channels you may read and your mailbox (`can_write` says whether you may post)."""
+        data = await self._call("GET", "/board/channels")
+        try:
+            return [BoardChannel.model_validate(c) for c in data]
+        except (ValidationError, TypeError) as e:
+            raise WorkbenchError(f"workbench sent an invalid channel list: {e}") from e
+
+    @staticmethod
+    def _messages(data: Any) -> list[BoardMessage]:
+        try:
+            return [BoardMessage.model_validate(m) for m in data]
+        except (ValidationError, TypeError) as e:
+            raise WorkbenchError(f"workbench sent invalid board messages: {e}") from e
+
+    async def board_post(self, channel: str, text: str, *, kind: str = "post",
+                         to: list[str] | None = None, refs: list[dict[str, Any]] | None = None) -> BoardMessage:
+        """Post to a channel, or to one worker's mailbox with channel `@<worker id>`.
+        The sender is set by the workbench from your token."""
+        data = await self._call("POST", f"/board/channels/{channel}/messages",
+                                json={"text": text, "kind": kind, "to": to or [], "refs": refs or []})
+        return self._messages([data])[0]
+
+    async def board_read(self, channel: str, *, after: int = 0, wait: float = 0, limit: int = 100,
+                         newest: bool = False) -> list[BoardMessage]:
+        """Messages of one channel after `after` (a `seq`); `wait` seconds long-polls for new ones,
+        `newest` returns the latest `limit` instead."""
+        params: dict[str, Any] = {"after": after, "limit": limit, "newest": newest}
+        if wait:
+            params["wait"] = wait
+        return self._messages(await self._call("GET", f"/board/channels/{channel}/messages", params=params,
+                                               timeout=wait + 10 if wait else None))
+
+    async def board_feed(self, *, after: int = 0, wait: float = 0, limit: int = 100) -> list[BoardMessage]:
+        """New messages across every channel you may read plus your mailbox, after `after`."""
+        params: dict[str, Any] = {"after": after, "limit": limit}
+        if wait:
+            params["wait"] = wait
+        return self._messages(await self._call("GET", "/board/feed", params=params,
+                                               timeout=wait + 10 if wait else None))
 
     async def aclose(self) -> None:
         if self._owns_http:      # a shared client is closed by whoever created it

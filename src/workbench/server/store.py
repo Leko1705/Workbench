@@ -17,6 +17,12 @@ Record shapes (the server only relies on the fields named here):
   event    {"seq", "time", "type", ...}  per task, append-only; `seq` counts up from 1.
             Types: "input" (text), "btw" (text, queued while running), "btw_applied", "state" (state), "status" (text), "tool" (id, tool, status,
             input, output), "delegated"/"child_result" (child_id, agent, topic[, state]).
+  channel  {"name", "description", "read_label_ids", "write_label_ids", "created_at"}
+            Board channels. Empty label lists mean "every label". Mailboxes ("@<worker id>") are
+            not stored; they exist implicitly for every worker.
+  message  {"seq", "time", "channel", "sender": {"kind": "worker"|"host"|"api", "id", "name"},
+            "kind", "text", "to": [worker ids], "refs": [{"type", "id"}]}
+            `seq` counts up over all channels together, so one cursor can follow everything.
   label    {"id", "name", "created_at"}   a cluster of workers; workers carry `label_ids` (at least one)
   api_key  {"id", "name", "prefix", "key_hash", "created_at", "last_used_at"}
   settings {"name", "description", "max_task_depth", "max_active_tasks",
@@ -133,6 +139,34 @@ class WorkbenchStore(ABC):
     async def update_settings(self, **fields: Any) -> Record:
         """Merge top-level keys into the settings; returns the result."""
 
+    # --------------------------------------------------------- board channels
+    @abstractmethod
+    async def add_channel(self, channel: Record) -> None: ...
+
+    @abstractmethod
+    async def get_channel(self, name: str) -> Record | None: ...
+
+    @abstractmethod
+    async def list_channels(self) -> list[Record]: ...
+
+    @abstractmethod
+    async def update_channel(self, name: str, **fields: Any) -> Record | None: ...
+
+    @abstractmethod
+    async def delete_channel(self, name: str) -> bool:
+        """Delete the channel and its messages."""
+
+    # --------------------------------------------------------- board messages
+    @abstractmethod
+    async def append_message(self, message: Record) -> Record:
+        """Store a message; the store assigns `seq` and `time`. Returns the stored record."""
+
+    @abstractmethod
+    async def list_messages(self, *, after: int = 0, channels: list[str] | None = None,
+                            limit: int = 200, newest: bool = False) -> list[Record]:
+        """Messages with `seq` > `after` (oldest first), optionally only from `channels`.
+        With `newest` the last `limit` matching messages instead of the first ones."""
+
     # ----------------------------------------------------------------- events
     @abstractmethod
     async def append_event(self, task_id: str, event: Record) -> None:
@@ -148,6 +182,9 @@ class InMemoryStore(WorkbenchStore):
         self._workers: dict[str, Record] = {}
         self._invites: dict[str, Record] = {}
         self._tasks: dict[str, Record] = {}
+        self._channels: dict[str, Record] = {}
+        self._messages: list[Record] = []
+        self._message_seq = 0
         self._labels: dict[str, Record] = {}
         self._api_keys: dict[str, Record] = {}
         self._settings: Record = {}
@@ -270,6 +307,44 @@ class InMemoryStore(WorkbenchStore):
     async def update_settings(self, **fields):
         self._settings.update(copy.deepcopy(fields))
         return copy.deepcopy(self._settings)
+
+    # board
+    MAX_MESSAGES = 20_000      # in total; the oldest are dropped
+
+    async def add_channel(self, channel):
+        self._channels[channel["name"]] = copy.deepcopy(channel)
+
+    async def get_channel(self, name):
+        return self._out(self._channels.get(name))
+
+    async def list_channels(self):
+        return [self._out(c) for c in self._channels.values()]
+
+    async def update_channel(self, name, **fields):
+        c = self._channels.get(name)
+        if c is not None:
+            c.update(copy.deepcopy(fields))
+        return self._out(c)
+
+    async def delete_channel(self, name):
+        existed = self._channels.pop(name, None) is not None
+        self._messages = [m for m in self._messages if m["channel"] != name]
+        return existed
+
+    async def append_message(self, message):
+        self._message_seq += 1
+        rec = {**copy.deepcopy(message), "seq": self._message_seq, "time": time.time()}
+        self._messages.append(rec)
+        if len(self._messages) > self.MAX_MESSAGES:
+            del self._messages[0]
+        return copy.deepcopy(rec)
+
+    async def list_messages(self, *, after=0, channels=None, limit=200, newest=False):
+        wanted = None if channels is None else set(channels)
+        found = [m for m in self._messages
+                 if m["seq"] > after and (wanted is None or m["channel"] in wanted)]
+        found = found[-limit:] if newest else found[:limit]
+        return [copy.deepcopy(m) for m in found]
 
     # events
     MAX_EVENTS = 2000          # per task; the oldest are dropped

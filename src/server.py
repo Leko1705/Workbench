@@ -18,6 +18,7 @@ if __name__ == "__main__":
         description="Echoes, uppercases, and can run shell commands.",
         skills=[Skill(id="echo", name="Echo", description="Repeats input", tags=["demo"])],
         tools=[UpperTool(), BashTool(timeout=10, allowed_commands=["ls", "echo", "date"]),
-               ListParticipantsTool(), DelegateTool()],
+               ListParticipantsTool(), DelegateTool(),
+               BoardChannelsTool(), BoardPostTool(), BoardReadTool(), BoardWaitTool()],
     )
     agent.run(host="127.0.0.1", port=9999, admin_password="1234")  # password from ADMIN_PASSWORD env
