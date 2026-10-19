@@ -13,6 +13,7 @@ let treeSig = "";
 
 onUnauthorized = () => { location.href = "index.html"; };
 mountSettingsIcon("settings-link");
+mountIcon("board-link", "board");
 
 // ------------------------------------------------------------------ tree
 const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);

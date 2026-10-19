@@ -223,3 +223,31 @@ pre.snippet { background: var(--bg); padding: 10px; border-radius: 8px; overflow
   .snav { width: 100%; flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
   .scontent { padding: 18px 16px; }
 }
+.msg.btw .body { border-left: 3px solid var(--warn); }
+
+/* ---- board page ---- */
+.board-page { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+.boardwrap { flex: 1; display: flex; min-height: 0; }
+.channels { width: 220px; flex-shrink: 0; background: var(--panel); border-right: 1px solid var(--line);
+  padding: 8px 8px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.channels h3 { padding: 14px 8px 4px; }
+button.chan { text-align: left; background: none; border: 0; color: var(--text); padding: 7px 10px;
+  border-radius: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.chan:hover { background: var(--bg); }
+button.chan.sel { background: var(--bg); color: var(--accent); font-weight: 600; }
+.feedcol { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.feed { flex: 1; overflow-y: auto; padding: 8px 20px; }
+.bmsg { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.bhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.btime { margin-left: auto; color: var(--muted); font-size: 12px; }
+.bchan { color: var(--muted); font-size: 12px; }
+.chip-kind { font-size: 11px; border: 1px solid var(--line); border-radius: 9px; padding: 0 7px; color: var(--muted); }
+.chip-kind.accent { border-color: var(--accent); color: var(--accent); }
+.btext { margin: 3px 0 0 30px; white-space: pre-wrap; word-break: break-word; }
+.compose { display: flex; gap: 8px; align-items: flex-end; padding: 10px 20px; border-top: 1px solid var(--line); background: var(--panel); }
+.compose textarea { margin: 0; }
+@media (max-width: 700px) { .channels { width: 140px; } .feed { padding: 8px 12px; } }
+.chan-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.chan-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 4px; }
+.chan-head .muted { flex: 1; }
+.agent-row .agent-name { min-width: 60px; }

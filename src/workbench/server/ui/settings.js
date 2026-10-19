@@ -5,6 +5,7 @@
 const SECTIONS = {
   general: { render: renderGeneral },
   labels: { render: renderLabels },
+  board: { render: renderBoard },
   "api-keys": { render: renderApiKeys },
 };
 let current = null;
@@ -57,6 +58,7 @@ async function renderGeneral(root) {
   const desc = el("textarea"); desc.rows = 3; desc.value = s.description; desc.maxLength = 2000;
   const depth = input(s.max_task_depth, { type: "number", min: 1, max: 50, required: true });
   const active = input(s.max_active_tasks, { type: "number", min: 1, max: 10000, required: true });
+  const rate = input(s.board_rate_per_minute, { type: "number", min: 1, max: 1000, required: true });
   const msg = notice();
   const save = el("button", "primary", "Save");
   save.type = "submit";
@@ -65,12 +67,14 @@ async function renderGeneral(root) {
     field("Description", desc),
     field("Maximum task depth", depth, "How deeply agents may delegate to sub-tasks."),
     field("Maximum running tasks", active, "Tasks running at the same time, in total."),
+    field("Board: messages per minute", rate, "How often one agent may post to the board."),
     msg, save);
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     try {
       await api("PATCH", "/admin/settings", { name: name.value, description: desc.value,
-        max_task_depth: +depth.value, max_active_tasks: +active.value });
+        max_task_depth: +depth.value, max_active_tasks: +active.value,
+        board_rate_per_minute: +rate.value });
       msg.show("Saved.");
     } catch (e) { msg.show(e.status === 422 ? "Please check the values." : e.message, true); }
   });
@@ -226,6 +230,67 @@ async function renderLabels(root) {
   }
   c3.append(m3);
   box.append(c1, c2, c3);
+  root.append(box);
+}
+
+// ------------------------------------------------------------------- board
+async function renderBoard(root) {
+  const [channels, view] = await Promise.all([api("GET", "/admin/board/channels"), api("GET", "/admin/labels")]);
+  const labels = view.labels;
+  const box = section("Board", "Channels are shared places where agents (and hosts) post messages. Only hosts " +
+    "create channels. Who may read and write each one is decided by labels. Every agent also has a private " +
+    "mailbox that other agents may write to if the label rules allow it. Watch it live on the Board page.");
+  const reload = async () => { await show(current, true); };
+  const msg = notice();
+
+  const form = el("form", "card sform");
+  const name = input("", { placeholder: "e.g. research", maxLength: 40, required: true, pattern: "[a-z0-9][a-z0-9_-]*" });
+  const desc = input("", { placeholder: "What is this channel for?", maxLength: 500 });
+  const add = el("button", "primary", "Create channel"); add.type = "submit";
+  form.append(el("h3", "plain", "New channel"), field("Name", name, "Lowercase letters, digits, - and _."),
+              field("Description", desc), add);
+  form.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    try { await api("POST", "/admin/board/channels", { name: name.value, description: desc.value }); await reload(); }
+    catch (e) { msg.show(e.message, true); }
+  });
+
+  const list = el("div", "card sform");
+  list.append(el("h3", "plain", "Channels"),
+    el("p", "muted hint", "Labels you select limit who may read or write. With none selected, everyone may."));
+  for (const c of channels) {
+    const row = el("div", "chan-row");
+    const head = el("div", "chan-head");
+    head.append(el("strong", "", `# ${c.name}`), el("span", "muted", c.description || ""));
+    head.append(button("Delete", "danger", async () => {
+      if (!window.confirm(`Delete #${c.name} and all its messages?`)) return;
+      try { await api("DELETE", `/admin/board/channels/${encodeURIComponent(c.name)}`); await reload(); }
+      catch (e) { msg.show(e.message, true); }
+    }));
+    row.append(head);
+    for (const [key, title] of [["read_label_ids", "Read"], ["write_label_ids", "Write"]]) {
+      const line = el("div", "agent-row");
+      line.append(el("span", "agent-name", title));
+      const chips = el("span", "chips");
+      if (!c[key].length) chips.append(el("span", "hint", "everyone"));
+      for (const l of labels) {
+        const on = c[key].includes(l.id);
+        const chip = el("button", `chip${on ? " on" : ""}`, l.name);
+        chip.type = "button";
+        chip.setAttribute("aria-pressed", on);
+        chip.addEventListener("click", async () => {
+          const ids = on ? c[key].filter(x => x !== l.id) : [...c[key], l.id];
+          try { await api("PATCH", `/admin/board/channels/${encodeURIComponent(c.name)}`, { [key]: ids }); await reload(); }
+          catch (e) { msg.show(e.message, true); }
+        });
+        chips.append(chip);
+      }
+      line.append(chips);
+      row.append(line);
+    }
+    list.append(row);
+  }
+  box.append(form, list, msg);
   root.append(box);
 }
 

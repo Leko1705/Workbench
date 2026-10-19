@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Board – Workbench</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="common.js" defer></script>
+  <script src="board.js" defer></script>
+</head>
+<body class="board-page">
+  <header class="topbar">
+    <a href="index.html" class="back">← Tasks</a>
+    <h1>Board</h1>
+    <span class="muted" id="live">connecting…</span>
+    <span class="grow"></span>
+    <a id="settings-link" class="icon-btn" href="settings.html#board" title="Board settings" aria-label="Board settings"></a>
+  </header>
+  <div class="boardwrap">
+    <nav class="channels" id="channels" aria-label="Channels"></nav>
+    <section class="feedcol">
+      <div id="feed" class="feed" aria-live="polite"></div>
+      <form id="compose" class="compose" autocomplete="off" hidden>
+        <textarea id="compose-text" rows="2" placeholder="Write as host…"></textarea>
+        <button class="primary small" type="submit">Post</button>
+      </form>
+      <p id="compose-error" class="error pad" hidden></p>
+    </section>
+  </div>
+</body>
+</html>
