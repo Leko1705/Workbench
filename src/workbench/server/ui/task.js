@@ -181,6 +181,10 @@ function addEvent(e, taskNode) {
   if (e.type === "input") {
     node = bubble("in", e.from === "host" ? "Task from host" : e.from === "api" ? "Task from an API client"
                                                                     : "Task from an agent", e.text);
+  } else if (e.type === "btw") {
+    node = bubble("in btw", `Message while working (${e.from === "host" ? "host" : e.from === "api" ? "API client" : "agent"})`, e.text);
+  } else if (e.type === "btw_applied") {
+    node = el("div", "msg state", "↳ the agent picked up the message");
   } else if (e.type === "state") {
     node = el("div", "msg state", `→ ${look(e.state)[2]}`);
   } else if (e.type === "status") {
@@ -214,15 +218,18 @@ let controlsKey = "";      // which reply form is showing; only rebuilt when it 
 function renderControls(t) {
   const waiting = t.state === "input_required" || t.state === "auth_required";
   const continues = t.parent_id === null && FINAL.has(t.state);
-  const key = `${t.id}:${waiting ? "reply" : continues ? "follow" : ""}`;
+  const btw = !!t.accepts_btw && !FINAL.has(t.state);       // a message while the agent works
+  const mode = waiting ? "reply" : continues ? "follow" : btw ? "btw" : "";
+  const key = `${t.id}:${mode}`;
   if (key === controlsKey) return;
   controlsKey = key;
   document.querySelectorAll("#log .reply").forEach(f => f.remove());
-  if (!waiting && !continues) return;
+  if (!mode) return;
   const form = el("form", "reply");
   const box = el("textarea");
   box.rows = 2;
-  box.placeholder = waiting ? "Reply to the agent…" : "Follow up in the same conversation…";
+  box.placeholder = { reply: "Reply to the agent…", follow: "Follow up in the same conversation…",
+    btw: "Send a message while the agent works (it reads it at its next step)…" }[mode];
   box.value = draft;
   box.addEventListener("input", () => { draft = box.value; });
   const go = el("button", "primary small", "Send");
@@ -233,16 +240,16 @@ function renderControls(t) {
     const text = box.value.trim();
     if (!text) return;
     go.disabled = true;
-    draft = "";
+    form.querySelectorAll(".error").forEach(p => p.remove());
     try {
-      if (waiting) {
-        await api("POST", `/admin/tasks/${t.id}/message`, { text });
-      } else {
+      if (mode === "follow") {
         const n = await api("POST", "/admin/tasks", { agent_id: t.worker_id, text, context_id: t.context_id });
         location.href = `task.html?id=${encodeURIComponent(n.id)}`;     // a follow-up is a new task tree
         return;
       }
+      await api("POST", `/admin/tasks/${t.id}/message`, { text });
     } catch (e) { form.append(el("p", "error", e.message)); go.disabled = false; return; }
+    draft = ""; box.value = ""; go.disabled = false;       // btw: the form stays for the next message
     pollPanel();
   });
   logBox().append(form);

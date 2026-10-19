@@ -118,7 +118,13 @@ def _to_anthropic_messages(messages: list[ChatMessage]) -> list[dict]:
     out: list[dict] = []
     for m in messages:
         if m.role == "user":
-            out.append({"role": "user", "content": m.text})
+            prev = out[-1] if out else None
+            if prev is not None and prev["role"] == "user" and isinstance(prev["content"], list):
+                # a message that arrived while tools ran: it must follow the tool results
+                # inside the same turn (tool_result blocks have to come first)
+                prev["content"].append({"type": "text", "text": m.text})
+            else:
+                out.append({"role": "user", "content": m.text})
         elif m.role == "assistant":
             blocks: list[dict] = []
             if m.text:

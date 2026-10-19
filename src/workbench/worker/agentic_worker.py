@@ -21,6 +21,10 @@ MAX_TOOL_OUTPUT = 2000     # characters of tool output forwarded to the caller
 class AgenticWorker(WorkerServer):
     """Agent loop: stream LLM text -> run requested tools -> repeat until done.
 
+    Messages that arrive while it works ("btw", see `WorkerServer.take_messages`) are never
+    applied in the middle of a generation or a tool call: after each step they are added to the
+    history as a user message and the loop goes on, even if the model had just finished.
+
     What the caller sees (A2A streaming):
       * status updates (WORKING) with a data part per tool call:
           {"id", "tool", "input", "status": "running"}
@@ -29,6 +33,8 @@ class AgenticWorker(WorkerServer):
         final empty chunk last_chunk=True)
       * a final COMPLETED (or FAILED) status
     """
+
+    supports_btw = True
 
     def __init__(
         self,
@@ -97,10 +103,19 @@ class AgenticWorker(WorkerServer):
                     raise RuntimeError("LLM stream ended without a final LLMResponse")
 
                 history.append(response.to_message())
-                if not response.tool_calls:
+                if response.tool_calls:
+                    results = [await self._run_tool(up, call) for call in response.tool_calls]
+                    history.append(ChatMessage.tool(results))
+                # a safe point: nothing is in flight. No await between taking the messages
+                # and closing the inbox, so a message either gets read here or is refused.
+                injected = self.take_messages(task.id)
+                if injected:
+                    history.append(ChatMessage.user("\n\n".join(injected)))
+                    await up.update_status(TaskState.TASK_STATE_WORKING, up.new_agent_message(
+                        [new_data_part({"btw_applied": len(injected)})]))
+                elif not response.tool_calls:
+                    self.close_inbox(task.id)
                     break
-                results = [await self._run_tool(up, call) for call in response.tool_calls]
-                history.append(ChatMessage.tool(results))
             else:
                 await emit("\n\n[stopped: tool round limit reached]")
 

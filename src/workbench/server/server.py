@@ -44,6 +44,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from . import labels as lbl
+from ..extensions import BTW_EXTENSION_URI
 from ..join_token import encode_join_token
 from .settings_api import API_KEY_PREFIX, build_settings_router, hash_api_key
 from .store import InMemoryStore, Record, WorkbenchStore
@@ -376,6 +377,8 @@ class WorkbenchServer:
             w = workers.get(t["worker_id"])
             v["worker_name"] = w["name"] if w else "(removed)"
             v["worker_has_icon"] = bool(w and w.get("icon_url"))
+            # can the agent take a message while this task runs?
+            v["accepts_btw"] = bool(w and w.get("btw")) and tasks.is_running(t["id"])
             v["running"] = tasks.is_running(t["id"])
             # is the party that asked for this task blocked until it finishes?
             v["waited"] = t["state"] not in FINAL_STATES and tasks.is_waited(t["id"])
@@ -439,7 +442,8 @@ class WorkbenchServer:
 
         @admin.post("/tasks/{task_id}/message")
         async def host_message_task(task_id: str, body: MessageIn):
-            """Answer a task that waits for input (state `input_required`)."""
+            """Add a message to a task: answers one that waits for input, or ("btw") is
+            queued for one that is still running if its agent supports that."""
             try:
                 t = await tasks.send_message(task_id, body.text)
             except TaskError as e:
@@ -617,7 +621,8 @@ class WorkbenchServer:
 
         @api.post("/tasks/{task_id}/message")
         async def agent_message_task(task_id: str, body: MessageIn, request: Request):
-            """Answer a task you started that waits for input (state `input_required`)."""
+            """Add a message to a task you started: answers one that waits for input, or ("btw")
+            is queued for one that is still running if its agent supports that."""
             me = await caller_any(request)
             await own_task(task_id, me)
             try:
@@ -701,13 +706,15 @@ class WorkbenchServer:
         """
         if time.time() - w.get("skills_at", 0) < SKILLS_TTL:
             return w
-        skills, icon_url = w.get("skills", []), w.get("icon_url", "")
+        skills, icon_url, btw = w.get("skills", []), w.get("icon_url", ""), w.get("btw", False)
         try:
             resp = await self._http.get(w["card_url"])
             if resp.status_code == 200 and len(resp.content) <= 1_000_000:
                 card = resp.json()
                 icon = card.get("iconUrl") or card.get("icon_url") or ""
                 icon_url = icon if isinstance(icon, str) and len(icon) <= 700_000 else ""
+                exts = (card.get("capabilities") or {}).get("extensions") or []
+                btw = any(isinstance(x, dict) and x.get("uri") == BTW_EXTENSION_URI for x in exts)
                 raw = card.get("skills")
                 if isinstance(raw, list):
                     skills = [{"id": str(s.get("id", ""))[:200], "name": str(s.get("name", ""))[:200],
@@ -717,7 +724,7 @@ class WorkbenchServer:
         except (httpx.HTTPError, ValueError, AttributeError, TypeError):
             pass
         return await self.store.update_worker(w["id"], skills=skills, icon_url=icon_url,
-                                              skills_at=time.time()) or w
+                                              btw=btw, skills_at=time.time()) or w
 
     async def _icon(self, w: Record) -> tuple[str, bytes] | None:
         """The worker's icon as (content type, bytes), fetched by the workbench itself.

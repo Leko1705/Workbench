@@ -12,10 +12,10 @@ Record shapes (the server only relies on the fields named here):
             "token_hash",         # sha256 of the token the worker uses to call the workbench
             "status",             # "pending" | "active" | "denied"
             "request_id", "poll_token_hash", "pending_token",  # join handshake, see server
-            "label_ids", "skills", "skills_at",     # public card skills, cached
+            "label_ids", "skills", "btw", "skills_at",     # public card skills, cached
             "invite_id", "created_at"}
   event    {"seq", "time", "type", ...}  per task, append-only; `seq` counts up from 1.
-            Types: "input" (text), "state" (state), "status" (text), "tool" (id, tool, status,
+            Types: "input" (text), "btw" (text, queued while running), "btw_applied", "state" (state), "status" (text), "tool" (id, tool, status,
             input, output), "delegated"/"child_result" (child_id, agent, topic[, state]).
   label    {"id", "name", "created_at"}   a cluster of workers; workers carry `label_ids` (at least one)
   api_key  {"id", "name", "prefix", "key_hash", "created_at", "last_used_at"}

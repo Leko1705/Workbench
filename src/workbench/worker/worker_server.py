@@ -34,6 +34,7 @@ separate from the public API v1 that third parties use through `WorkbenchClient`
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -54,6 +55,9 @@ from fastapi.staticfiles import StaticFiles
 from google.protobuf.json_format import MessageToDict
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, ValidationInfo, field_validator, model_validator
 from starlette.applications import Starlette
+from starlette.requests import Request as StarletteRequest
+from starlette.responses import JSONResponse as StarletteJSON
+from starlette.routing import Route
 from starlette.datastructures import Headers
 
 from a2a.helpers import new_text_message
@@ -62,12 +66,13 @@ from a2a.server.events import EventQueue
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.routes import create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore, TaskStore, TaskUpdater
-from a2a.types import AgentCapabilities, AgentCard, AgentInterface, AgentSkill
+from a2a.types import AgentCapabilities, AgentCard, AgentExtension, AgentInterface, AgentSkill
 from a2a.utils.errors import InvalidParamsError, InvalidRequestError
 
 from .context import TaskContext, _current
 from .tools import Tool, ToolError
 from .web_auth import SAFE_METHODS, LoginLimiter, SecurityHeaders, SessionStore, origin_allowed
+from ..extensions import BTW_EXTENSION_URI, BTW_PATH
 from ..join_token import decode_join_token
 from ..workbench import Participant, PingInfo, TaskInfo, WorkbenchClient, WorkbenchError
 
@@ -189,7 +194,7 @@ class WorkbenchConnection:
         return await self._api.list_tasks(scope)
 
     async def send_message(self, task_id: str, text: str) -> TaskInfo:
-        """Answer a task you started that waits for input."""
+        """Add a message to a task you started (answers a waiting task, or reaches a running one)."""
         return await self._api.send_message(task_id, text)
 
     async def ping(self) -> PingInfo:
@@ -237,6 +242,15 @@ def _active(rec: dict | None) -> dict | None:
     return rec if rec is not None and rec.get("active", True) else None
 
 
+class _Running:
+    """A task whose `run_task` is executing right now, and the messages queued for it."""
+
+    def __init__(self, owner: str):
+        self.owner = owner            # hash of the bearer token that started the task
+        self.inbox: list[str] = []
+        self.open = True              # False once the task no longer reads its inbox
+
+
 class _BearerAuth:
     """Pure-ASGI bearer-token check (safe for SSE streaming)."""
 
@@ -258,6 +272,10 @@ class _BearerAuth:
 class WorkerServer(AgentExecutor):
     """Base class for worker agents.
 
+    "btw" support: a subclass whose `run_task` reads `take_messages()` between its steps (see
+    `AgenticWorker`) sets `supports_btw = True`. The caller can then add a message to a task
+    that is still running; it waits in an inbox until the task takes it up.
+
     Agent-specific configuration goes into the constructor, server-specific
     configuration into `run()` / `build_app()`.
 
@@ -266,6 +284,8 @@ class WorkerServer(AgentExecutor):
     The state file also holds the outbound workbench tokens in plain text, so
     it is written with mode 0600.
     """
+
+    supports_btw: bool = False
 
     def __init__(
         self,
@@ -321,6 +341,7 @@ class WorkerServer(AgentExecutor):
             _norm_url(u): WorkbenchConnection(u, t, self._http)
             for u, t in self._state["workbenches"].items()}
 
+        self._running: dict[str, _Running] = {}     # a2a task id -> running task (see take_messages)
         self._task_store = task_store or InMemoryTaskStore()
         # The live card. The SDK handler keeps a reference to this very object,
         # so mutating it in place changes what the running server uses.
@@ -357,9 +378,15 @@ class WorkerServer(AgentExecutor):
                 raise InvalidRequestError(f"workbench {bound} is not registered on this worker")
         task_id = wb_meta.get("task_id") if isinstance(wb_meta, dict) else None
         reset = _current.set(TaskContext(workbench, task_id if isinstance(task_id, str) else None))
+        running = _Running(self._caller_token_hash(context))
+        if context.task_id:
+            self._running[context.task_id] = running
         try:
             await self.run_task(context, event_queue, workbench)
         finally:
+            running.open = False
+            if context.task_id and self._running.get(context.task_id) is running:
+                del self._running[context.task_id]
             _current.reset(reset)
 
     @abstractmethod
@@ -377,6 +404,40 @@ class WorkerServer(AgentExecutor):
         Override for cleanup, but still end with a CANCELED status.
         """
         await TaskUpdater(event_queue, context.task_id, context.context_id).cancel()
+
+    # ----------------------------------------------------- btw (messages while working)
+    def take_messages(self, task_id: str) -> list[str]:
+        """Messages that arrived for a running task since the last call (and forget them).
+
+        Call it between the steps of `run_task`, never in the middle of one. It is not a
+        coroutine on purpose: with no `await` between taking the messages and calling
+        `close_inbox`, nothing can slip in unseen.
+        """
+        r = self._running.get(task_id)
+        if r is None or not r.inbox:
+            return []
+        msgs, r.inbox = r.inbox, []
+        return msgs
+
+    def close_inbox(self, task_id: str) -> None:
+        """The task is about to finish: messages that arrive later are refused (409)."""
+        r = self._running.get(task_id)
+        if r is not None:
+            r.open = False
+
+    def _queue_message(self, task_id: str, text: str, owner: str) -> tuple[int, str]:
+        """(HTTP status, detail) of an attempt to queue a message for a running task."""
+        if not self.supports_btw:
+            return 501, "this agent cannot take messages while it works"
+        r = self._running.get(task_id)
+        if r is None or not secrets.compare_digest(r.owner.encode(), owner.encode()):
+            return 404, "no such running task"          # same answer for foreign tasks
+        if not r.open:
+            return 409, "the task is finishing and no longer reads messages"
+        if sum(len(m) for m in r.inbox) + len(text) > 200_000:
+            return 429, "too many queued messages"
+        r.inbox.append(text)
+        return 200, "queued"
 
     # ----------------------------------------------------- helpers for subclasses
     async def reply_text(self, event_queue: EventQueue, text: str) -> None:
@@ -409,6 +470,11 @@ class WorkerServer(AgentExecutor):
         s, c = self._state, self.agent_card
         c.name, c.description, c.version = s["name"], s["description"], s["version"]
         c.icon_url = s["icon_url"]
+        del c.capabilities.extensions[:]
+        if self.supports_btw:
+            c.capabilities.extensions.append(AgentExtension(
+                uri=BTW_EXTENSION_URI, required=False,
+                description="Takes messages that arrive while a task runs and reads them at its next step."))
         del c.skills[:]
         for sk in s["skills"].values():
             c.skills.append(AgentSkill(id=sk["id"], name=sk["name"],
@@ -434,6 +500,11 @@ class WorkerServer(AgentExecutor):
 
     def _verify_token(self, token: str) -> bool:
         return self._token_record(token) is not None
+
+    @staticmethod
+    def _caller_token_hash(context: RequestContext) -> str:
+        auth = context.call_context.state.get("headers", {}).get("authorization", "")
+        return _hash_token(auth.partition(" ")[2])
 
     def _caller_token_record(self, context: RequestContext) -> dict | None:
         """The token record of the request's Authorization header (set by the SDK)."""
@@ -549,7 +620,22 @@ class WorkerServer(AgentExecutor):
 
         handler = DefaultRequestHandler(agent_executor=self, task_store=self._task_store,
                                         agent_card=self.agent_card)
-        a2a_app = Starlette(routes=[*create_jsonrpc_routes(handler, rpc_url="/")])
+        async def btw(request: StarletteRequest):
+            """Queue a message for a running task (the "btw" extension, see extensions.py)."""
+            auth = request.headers.get("authorization", "")
+            try:
+                body = await request.json()
+                task_id, text = body["task_id"], body["text"]
+                if not (isinstance(task_id, str) and isinstance(text, str) and text.strip()
+                        and len(text) <= 100_000):
+                    raise ValueError
+            except (ValueError, KeyError, TypeError):
+                return StarletteJSON({"detail": "expected {task_id, text}"}, 400)
+            status, detail = self._queue_message(task_id, text, _hash_token(auth.partition(" ")[2]))
+            return StarletteJSON({"detail": detail, "queued": status == 200}, status)
+
+        a2a_app = Starlette(routes=[*create_jsonrpc_routes(handler, rpc_url="/"),
+                                    Route(BTW_PATH, btw, methods=["POST"])])
         a2a_app.add_middleware(_BearerAuth, verify=self._verify_token)
 
         # ------------------------------------------------------ admin auth

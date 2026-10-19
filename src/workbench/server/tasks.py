@@ -29,6 +29,7 @@ from google.protobuf.json_format import MessageToDict
 from a2a.types import (CancelTaskRequest, Message, Part, Role, SendMessageRequest, StreamResponse,
                        TaskState)
 
+from ..extensions import BTW_PATH
 from .store import Record, WorkbenchStore
 
 log = logging.getLogger(__name__)
@@ -183,11 +184,14 @@ class TaskManager:
 
     # ------------------------------------------------------------------ run
     async def send_message(self, task_id: str, text: str, *, requested_by: str | None = None) -> Record:
-        """Answer a task that waits for input (`input_required`/`auth_required`); it resumes.
+        """Add a message to an unfinished task.
 
-        A finished task cannot take messages: start a new task with the same `context_id`
-        to continue that conversation. With `requested_by` the task must be one that
-        worker started.
+        * waiting for input (`input_required`/`auth_required`): the task resumes with it
+        * still running ("btw"): the message is queued at the worker, which reads it at its
+          next safe point (between generation and tool steps), if the agent supports it
+        * finished: refused; start a new task with the same `context_id` to continue
+
+        With `requested_by` the task must be one that worker started.
         """
         rec = await self.store.get_task(task_id)
         if rec is None or (requested_by is not None and rec["requested_by"] != requested_by):
@@ -196,9 +200,9 @@ class TaskManager:
             raise TaskError("text must not be empty")
         if rec["state"] in FINAL_STATES:
             raise TaskError("the task has finished; start a new task with the same context_id", 409)
-        if task_id in self._runners:
-            raise TaskError("the task is still running; wait until it asks for input", 409)
         worker = await self.store.get_worker(rec["worker_id"])
+        if task_id in self._runners:
+            return await self._send_btw(rec, worker, text[:MAX_TEXT], requested_by)
         if worker is None or worker["status"] != "active" or not rec["a2a_task_id"]:
             raise TaskError("the task cannot be continued", 409)
         rec = await self.store.update_task(task_id, state="working", status_text="",
@@ -209,6 +213,35 @@ class TaskManager:
         self._runners[task_id] = asyncio.create_task(self._run(rec, worker, followup=text[:MAX_TEXT]),
                                                      name=f"task-{task_id}")
         return rec
+
+    async def _send_btw(self, rec: Record, worker: Record | None, text: str,
+                        requested_by: str | None) -> Record:
+        """Queue a message for a task that is running (see `BTW_EXTENSION_URI`)."""
+        if worker is None or worker["status"] != "active":
+            raise TaskError("the agent is no longer part of this workbench", 409)
+        if not worker.get("btw"):
+            raise TaskError("this agent cannot take messages while it works; wait until it is done "
+                            "or cancel the task", 409)
+        if not rec["a2a_task_id"]:
+            raise TaskError("the task has only just started; try again in a moment", 409)
+        await self._client_for(worker)                  # makes sure the authenticated HTTP client exists
+        http = self._clients[worker["id"]][1]
+        try:
+            resp = await http.post(worker["a2a_url"].rstrip("/") + BTW_PATH,
+                                   json={"task_id": rec["a2a_task_id"], "text": text}, timeout=10.0)
+        except httpx.HTTPError as e:
+            raise TaskError(f"the agent could not be reached: {type(e).__name__}", 502) from e
+        if resp.status_code != 200:
+            try:
+                detail = resp.json().get("detail")
+            except ValueError:
+                detail = None
+            raise TaskError(detail if isinstance(detail, str) else f"the agent refused (HTTP {resp.status_code})",
+                            409 if resp.status_code in (404, 409, 501) else 502)
+        await self.store.append_event(rec["id"], {
+            "type": "btw", "text": text,
+            "from": "host" if requested_by is None else "api" if requested_by.startswith("key:") else "agent"})
+        return await self.store.update_task(rec["id"], updated_at=time.time()) or rec
 
     async def _run(self, rec: Record, worker: Record, followup: str | None = None) -> None:
         tid = rec["id"]
@@ -306,7 +339,9 @@ class TaskManager:
                 for part in su.status.message.parts:
                     if part.HasField("data"):
                         d = MessageToDict(part.data)
-                        if isinstance(d, dict) and isinstance(d.get("tool"), str):
+                        if isinstance(d, dict) and "btw_applied" in d:      # the worker read queued messages
+                            events.append({"type": "btw_applied"})
+                        elif isinstance(d, dict) and isinstance(d.get("tool"), str):
                             events.append({"type": "tool", "id": str(d.get("id", ""))[:200],
                                            "tool": d["tool"][:200], "status": str(d.get("status", ""))[:20],
                                            "input": d.get("input"), "output": str(d.get("output", ""))[:4000]})

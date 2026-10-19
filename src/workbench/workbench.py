@@ -172,7 +172,9 @@ class WorkbenchClient:
             raise WorkbenchError(f"workbench sent an invalid task list: {e}") from e
 
     async def send_message(self, task_id: str, text: str) -> TaskInfo:
-        """Answer a task you started that is in state `input_required`; it resumes."""
+        """Add a message to a task you started. If it is `input_required` the task resumes. If
+        it is still running, the message is queued and the agent reads it at its next step
+        ("btw"); that fails with a `WorkbenchError` if the agent does not support it."""
         return await self._task("POST", f"/tasks/{task_id}/message", json={"text": text})
 
     async def cancel_task(self, task_id: str) -> None:
