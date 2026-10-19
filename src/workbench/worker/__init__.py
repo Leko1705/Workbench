@@ -19,6 +19,7 @@ LLMResponse,
 StreamEvent,
 )
 from .agentic_worker import AgenticWorker
+from .human_worker import HumanWorker
 
 
 def __fake_use(_):

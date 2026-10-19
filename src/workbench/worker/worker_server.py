@@ -316,6 +316,7 @@ class WorkerServer(AgentExecutor):
     """
 
     supports_btw: bool = False
+    features: tuple[str, ...] = ()      # extra UI pages a subclass offers (see `extend_admin`), e.g. "inbox"
 
     def __init__(
         self,
@@ -435,6 +436,19 @@ class WorkerServer(AgentExecutor):
         """
         await TaskUpdater(event_queue, context.task_id, context.context_id).cancel()
 
+    def extend_admin(self, router: APIRouter) -> None:
+        """Hook for subclasses: add endpoints to the admin API (they get its authentication)."""
+
+    def workbench_connection(self, url: str | None = None) -> WorkbenchConnection:
+        """A joined workbench (the given one, or the only/first one); `ValueError` if there is none."""
+        if url:
+            conn = self._wb_connections.get(_norm_url(url))
+        else:
+            conn = next(iter(self._wb_connections.values()), None)
+        if conn is None:
+            raise ValueError("this worker has not joined that workbench")
+        return conn
+
     # ----------------------------------------------------- btw (messages while working)
     def take_messages(self, task_id: str) -> list[str]:
         """Messages that arrived for a running task since the last call (and forget them).
@@ -521,6 +535,7 @@ class WorkerServer(AgentExecutor):
                                "active": r.get("active", True)}
                               for r in self._state["tokens"].values()),
                              key=lambda r: r["label"]),
+            "features": list(self.features),
             "workbenches": sorted(self._wb_connections),   # URLs only, never tokens
             "pending_joins": sorted(self._state["pending_joins"]),
         }
@@ -961,6 +976,7 @@ class WorkerServer(AgentExecutor):
         async def public_card():
             return JSONResponse(MessageToDict(self.agent_card))
 
+        self.extend_admin(admin)
         app.include_router(session)
         app.include_router(admin)
         app.mount("/a2a", a2a_app)

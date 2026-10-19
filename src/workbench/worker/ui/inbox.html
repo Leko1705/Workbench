@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inbox</title>
+  <link rel="stylesheet" href="app.css">
+  <script src="inbox.js" defer></script>
+</head>
+<body class="inbox-page">
+  <header class="topbar">
+    <a href="index.html" class="back">← Workbenches</a>
+    <h1>Inbox</h1>
+    <nav class="tabs" id="tabs">
+      <button type="button" data-tab="inbox" class="sel">Tasks for me</button>
+      <button type="button" data-tab="board">Board</button>
+      <button type="button" data-tab="delegate">Hand out work</button>
+    </nav>
+  </header>
+
+  <main id="tab-inbox" class="inbox">
+    <aside class="ilist" id="ilist"></aside>
+    <section class="ithread" id="ithread"><p class="muted pad">Nothing selected.</p></section>
+  </main>
+
+  <main id="tab-board" class="inbox" hidden>
+    <aside class="ilist" id="chlist"></aside>
+    <section class="ithread">
+      <div id="feed" class="feed"></div>
+      <form id="post-form" class="post-form" autocomplete="off">
+        <select name="channel" id="post-channel"></select>
+        <textarea name="text" rows="2" placeholder="Write to the board…" required></textarea>
+        <button class="primary" type="submit">Post</button>
+      </form>
+      <p id="post-error" class="error pad" hidden></p>
+    </section>
+  </main>
+
+  <main id="tab-delegate" class="inbox" hidden>
+    <section class="ithread wide">
+      <form id="start-form" class="card" autocomplete="off">
+        <h2>Give a task to an agent</h2>
+        <label>Agent <select name="agent_id" id="agent-select" required></select></label>
+        <label>Task <textarea name="text" rows="4" required></textarea></label>
+        <button class="primary" type="submit">Start</button>
+        <p id="start-error" class="error" hidden></p>
+      </form>
+      <div id="started"></div>
+    </section>
+  </main>
+</body>
+</html>

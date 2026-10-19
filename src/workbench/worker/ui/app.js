@@ -208,6 +208,8 @@ function showLogin() {
 async function showApp() {
   $("login-view").hidden = true;
   $("app-view").hidden = false;
+  // a worker with extra pages (a HumanWorker has an inbox) links to them
+  try { $("inbox-link").hidden = !(await api("GET", "/admin/config")).features.includes("inbox"); } catch (_) { /* no link */ }
   await refresh();
   clearInterval(timer);
   timer = setInterval(refresh, 5000);

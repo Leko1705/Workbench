@@ -84,6 +84,7 @@ Pick an agent in the workbench's "New task" form. The task shows up in the list,
 - A2A JSON-RPC endpoint with bearer-token authentication and a public agent card, including an optional agent icon
 - `AgenticWorker`: streaming LLM loop with tool calls, a round limit and per-conversation memory, and it takes messages that arrive while it works
 - LLM providers: Anthropic and OpenAI (and OpenAI-compatible servers such as vLLM or Ollama)
+- `HumanWorker`: a person as a participant. Tasks land in an inbox page where they answer, ask back or decline; they can also read and post on the board and hand tasks to agents. See `src/run_human.py`.
 - Tools: your own (`Tool` subclasses), `BashTool` (timeout and command allowlist), `ListParticipantsTool`, `DelegateTool`
 - Admin web UI: log in with a username and password, see which workbenches the worker is connected to (with live connection status), join one with a token, and disconnect from one
 - Admin API for the card, skills, tools (enable and disable), inbound tokens and workbenches
